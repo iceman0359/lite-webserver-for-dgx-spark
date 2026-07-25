@@ -2,7 +2,24 @@
 
 Lightweight local-only backend for an aarch64 Ubuntu ComfyUI container manager.
 
-## Build On Ubuntu aarch64
+## Run On Ubuntu aarch64 Without Go
+
+Recommended install:
+
+```bash
+mkdir -p ~/Comfyui/webserver
+cd ~/Comfyui/webserver
+wget -O comfyui-manager-linux-arm64.tar.gz \
+  https://github.com/iceman0359/lite-webserver-for-dgx-spark/releases/latest/download/comfyui-manager-linux-arm64.tar.gz
+tar -xzf comfyui-manager-linux-arm64.tar.gz
+cp comfyui-manager-linux-arm64 comfyui-manager
+chmod +x comfyui-manager start.sh
+./start.sh
+```
+
+If you cloned the source repository instead, `start.sh` will download the latest Linux arm64 release automatically when `./comfyui-manager` is missing. Go is only needed when you want to build from source yourself.
+
+## Build From Source On Ubuntu aarch64
 
 ```bash
 cd comfyui-manager-lite
