@@ -1,0 +1,15 @@
+[Unit]
+Description=ComfyUI Manager Lite
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Comfyui/comfyui-manager-lite
+ExecStart=%h/Comfyui/comfyui-manager-lite/start.sh
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

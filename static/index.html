@@ -1,0 +1,2440 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ComfyUI 容器管理器</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f6f3;
+      --panel: #ffffff;
+      --panel-soft: #f0f4f2;
+      --ink: #161817;
+      --muted: #656d68;
+      --line: #d9dfdc;
+      --line-strong: #c3cbc7;
+      --sidebar: #20211f;
+      --sidebar-soft: #2b2d2a;
+      --green: #1f9d63;
+      --green-soft: #e4f6ee;
+      --teal: #0f7f83;
+      --amber: #b26a00;
+      --amber-soft: #fff3d8;
+      --red: #c74343;
+      --red-soft: #fde7e7;
+      --violet: #6f57b5;
+      --shadow: 0 14px 36px rgba(28, 33, 31, .08);
+      --radius: 8px;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { height: 100%; }
+
+    html {
+      overflow: hidden;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      letter-spacing: 0;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .55;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 236px 1fr;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      min-height: 100vh;
+      background: var(--sidebar);
+      color: #f4f6f0;
+      padding: 18px 14px;
+      position: sticky;
+      top: 0;
+    }
+
+    .brand {
+      display: grid;
+      gap: 6px;
+      padding: 10px 10px 14px;
+      border-bottom: 1px solid rgba(255,255,255,.12);
+    }
+
+    .brand strong {
+      font-size: 17px;
+      line-height: 1.2;
+      font-weight: 760;
+    }
+
+    .brand span {
+      color: rgba(244,246,240,.68);
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav-btn {
+      width: 100%;
+      min-height: 42px;
+      display: grid;
+      grid-template-columns: 28px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      color: rgba(244,246,240,.76);
+      background: transparent;
+      border-radius: var(--radius);
+      text-align: left;
+    }
+
+    .nav-btn:hover,
+    .nav-btn.active {
+      background: var(--sidebar-soft);
+      color: #fff;
+    }
+
+    .nav-icon {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      color: #d9eadf;
+      font-family: var(--mono);
+      font-size: 15px;
+    }
+
+    .nav-kbd {
+      color: rgba(244,246,240,.42);
+      font-size: 11px;
+      font-family: var(--mono);
+    }
+
+    .side-foot {
+      margin-top: auto;
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.04);
+      color: rgba(244,246,240,.7);
+      font-size: 12px;
+    }
+
+    .local-dot {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .local-dot::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      flex: 0 0 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(31,157,99,.16);
+    }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+    }
+
+    .topbar {
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 28px;
+      background: rgba(245,246,243,.86);
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      z-index: 4;
+      backdrop-filter: blur(10px);
+    }
+
+    .crumb {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+
+    .crumb small {
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+
+    .crumb h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.25;
+      font-weight: 760;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .chip {
+      min-height: 32px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .chip strong {
+      color: var(--ink);
+      font-weight: 720;
+    }
+
+    .content {
+      width: min(1180px, 100%);
+      margin: 0 auto;
+      padding: 24px 28px 34px;
+    }
+
+    .page {
+      display: none;
+      min-width: 0;
+    }
+
+    .page.active {
+      display: grid;
+      gap: 18px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      min-width: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-head {
+      min-height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-title {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .panel-title strong {
+      font-size: 15px;
+      line-height: 1.25;
+    }
+
+    .panel-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .panel-body {
+      padding: 16px;
+    }
+
+    .status-box {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 14px;
+      align-items: center;
+      padding: 18px;
+      border-radius: var(--radius);
+      background: linear-gradient(90deg, var(--green-soft), #eef7f6 56%, #f6f7f2);
+      border: 1px solid #cce8dc;
+    }
+
+    .status-main {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .status-led {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 14px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 7px rgba(31,157,99,.13);
+    }
+
+    .status-led.stopped {
+      background: var(--amber);
+      box-shadow: 0 0 0 7px rgba(178,106,0,.12);
+    }
+
+    .status-led.missing {
+      background: var(--red);
+      box-shadow: 0 0 0 7px rgba(199,67,67,.12);
+    }
+
+    .status-copy {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+
+    .status-copy strong {
+      font-size: 24px;
+      line-height: 1.1;
+    }
+
+    .status-copy span {
+      color: #476158;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .health-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .metric {
+      min-height: 86px;
+      display: grid;
+      align-content: center;
+      gap: 6px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfa;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric strong {
+      font-size: 18px;
+      font-weight: 760;
+      overflow-wrap: anywhere;
+    }
+
+    .action-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+      gap: 12px;
+    }
+
+    .action-btn {
+      min-height: 76px;
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      align-items: center;
+      gap: 12px;
+      padding: 14px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: #fbfcfa;
+      color: var(--ink);
+      text-align: left;
+    }
+
+    .action-btn:hover {
+      border-color: var(--line-strong);
+      transform: translateY(-1px);
+      box-shadow: 0 10px 22px rgba(28,33,31,.08);
+    }
+
+    .action-symbol {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: var(--radius);
+      background: var(--panel-soft);
+      color: var(--teal);
+      font-family: var(--mono);
+      font-weight: 800;
+    }
+
+    .danger .action-symbol {
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .action-copy {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+
+    .action-copy strong {
+      font-size: 14px;
+      line-height: 1.2;
+    }
+
+    .action-copy span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .notice {
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      border: 1px solid #e9d49e;
+      background: var(--amber-soft);
+      color: #6b4300;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .path-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .input {
+      width: 100%;
+      min-height: 40px;
+      padding: 0 12px;
+      color: var(--ink);
+      background: #fbfcfa;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      outline: none;
+      font-family: var(--mono);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .input:focus {
+      border-color: var(--teal);
+      box-shadow: 0 0 0 3px rgba(15,127,131,.12);
+    }
+
+    .textarea {
+      min-height: 120px;
+      padding: 10px 12px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    .wide {
+      grid-column: 1 / -1;
+    }
+
+    .btn {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      color: var(--ink);
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      border-color: #9fa9a4;
+      background: #f9fbf8;
+    }
+
+    .btn.primary {
+      border-color: #128068;
+      background: #128068;
+      color: #fff;
+    }
+
+    .btn.primary:hover {
+      background: #0f725f;
+    }
+
+    .btn.warn {
+      border-color: #cf9d47;
+      color: #6f4300;
+      background: #fff8e9;
+    }
+
+    .storage {
+      display: grid;
+      gap: 10px;
+    }
+
+    .storage-top {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .storage-top strong {
+      color: var(--ink);
+      font-size: 22px;
+    }
+
+    .bar {
+      height: 10px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #e5e9e7;
+    }
+
+    .bar span {
+      display: block;
+      height: 100%;
+      width: 64%;
+      background: linear-gradient(90deg, var(--green), var(--teal), var(--violet));
+    }
+
+    .file-table,
+    .session-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 13px;
+    }
+
+    .file-table th,
+    .file-table td,
+    .session-table th,
+    .session-table td {
+      padding: 11px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-table th,
+    .session-table th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 680;
+      background: #fbfcfa;
+    }
+
+    .file-table tbody tr[data-kind="DIR"] {
+      cursor: pointer;
+    }
+
+    .file-table tbody tr:hover {
+      background: #f7faf8;
+    }
+
+    .file-table tr:last-child td,
+    .session-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .name-cell {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .type-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 32px;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--panel-soft);
+      color: var(--teal);
+      font-size: 11px;
+      font-family: var(--mono);
+    }
+
+    .delete-file {
+      min-height: 30px;
+      padding: 0 9px;
+      border-radius: var(--radius);
+      border: 1px solid #efc6c6;
+      background: var(--red-soft);
+      color: var(--red);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .delete-file:hover {
+      border-color: #df9999;
+      background: #fbd9d9;
+    }
+
+    .terminal-layout {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .terminal-side {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .terminal-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .term-tab {
+      min-height: 54px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfa;
+      color: var(--ink);
+      text-align: left;
+    }
+
+    .term-tab.active {
+      border-color: #8bbcb0;
+      background: #eef8f5;
+    }
+
+    .term-select {
+      min-width: 0;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+    }
+
+    .term-select span {
+      min-width: 0;
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+
+    .term-select strong {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 13px;
+      line-height: 1.2;
+    }
+
+    .close-term {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .close-term:hover {
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .terminal-box {
+      min-height: 430px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border-radius: var(--radius);
+      border: 1px solid #20211f;
+      background: #111311;
+      box-shadow: 0 18px 42px rgba(17,19,17,.18);
+    }
+
+    .terminal-head {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 0 12px;
+      border-bottom: 1px solid rgba(255,255,255,.1);
+      background: #20211f;
+      color: rgba(255,255,255,.78);
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+
+    .terminal-output {
+      flex: 1;
+      margin: 0;
+      padding: 14px;
+      overflow: auto;
+      min-height: 280px;
+      max-height: 56vh;
+      overscroll-behavior: contain;
+      color: #d9eadf;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .terminal-input {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 12px;
+      border-top: 1px solid rgba(255,255,255,.1);
+      background: #171917;
+      color: #d9eadf;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .terminal-input input {
+      min-width: 0;
+      color: #f3fff8;
+      background: transparent;
+      border: 0;
+      outline: none;
+      font-family: var(--mono);
+    }
+
+    .terminal-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px 12px 12px;
+      border-top: 1px solid rgba(255,255,255,.08);
+      background: #151715;
+    }
+
+    .control-key {
+      min-height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 10px;
+      border-radius: var(--radius);
+      border: 1px solid rgba(217,234,223,.18);
+      background: rgba(255,255,255,.05);
+      color: #d9eadf;
+      font-family: var(--mono);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .control-key:hover {
+      border-color: rgba(217,234,223,.38);
+      background: rgba(255,255,255,.1);
+    }
+
+    .download-empty {
+      min-height: 230px;
+      display: grid;
+      place-items: center;
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--radius);
+      color: var(--muted);
+      text-align: center;
+      padding: 24px;
+      background: #fbfcfa;
+    }
+
+    .download-form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+    }
+
+    .download-preview {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: #111311;
+      color: #d9eadf;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+
+    .download-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .download-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfa;
+    }
+
+    .download-item strong,
+    .download-item span {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .download-item span {
+      margin-top: 4px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .segmented {
+      display: inline-grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+      padding: 4px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+
+    .seg-btn {
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .seg-btn.active {
+      background: #fff;
+      color: var(--ink);
+      box-shadow: 0 4px 10px rgba(28,33,31,.08);
+    }
+
+    .proxy-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .proxy-state {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .proxy-state strong {
+      font-size: 18px;
+      overflow-wrap: anywhere;
+    }
+
+    .proxy-state span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .proxy-buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .field label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 680;
+    }
+
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      z-index: 20;
+      width: min(420px, calc(100vw - 40px));
+      display: none;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      color: var(--ink);
+      box-shadow: 0 16px 38px rgba(28,33,31,.16);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .toast.show {
+      display: block;
+    }
+
+    @media (max-width: 920px) {
+      html {
+        overflow: auto;
+      }
+
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        min-height: auto;
+        position: static;
+        padding: 10px;
+      }
+
+      .brand {
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        padding: 8px 8px 10px;
+      }
+
+      .brand span {
+        justify-self: end;
+      }
+
+      .nav {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+      }
+
+      .nav-btn {
+        grid-template-columns: 1fr;
+        justify-items: center;
+        min-height: 58px;
+        gap: 2px;
+        padding: 6px 4px;
+        text-align: center;
+      }
+
+      .nav-icon {
+        width: 24px;
+        height: 24px;
+      }
+
+      .nav-kbd,
+      .side-foot {
+        display: none;
+      }
+
+      .main {
+        height: auto;
+        overflow: visible;
+      }
+
+      .topbar {
+        position: static;
+        padding: 14px 16px;
+        align-items: flex-start;
+      }
+
+      .content {
+        padding: 18px 16px 28px;
+      }
+
+      .grid-2,
+      .terminal-layout,
+      .settings-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .action-row,
+      .health-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .path-row {
+        grid-template-columns: 1fr;
+      }
+
+      .download-form {
+        grid-template-columns: 1fr;
+      }
+
+      .proxy-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .topbar {
+        display: grid;
+      }
+
+      .top-actions {
+        justify-content: flex-start;
+      }
+
+      .nav {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .status-box {
+        grid-template-columns: 1fr;
+      }
+
+      .status-copy strong {
+        font-size: 21px;
+      }
+
+      .file-table th:nth-child(3),
+      .file-table td:nth-child(3),
+      .file-table th:nth-child(4),
+      .file-table td:nth-child(4) {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <strong>ComfyUI 容器管理器</strong>
+        <span>DGX Spark / aarch64</span>
+      </div>
+
+      <nav class="nav" aria-label="主导航">
+        <button class="nav-btn active" data-page="controller" type="button">
+          <span class="nav-icon">01</span><span>控制器</span><span class="nav-kbd">Ctrl</span>
+        </button>
+        <button class="nav-btn" data-page="manager" type="button">
+          <span class="nav-icon">02</span><span>管理器</span><span class="nav-kbd">Dir</span>
+        </button>
+        <button class="nav-btn" data-page="downloader" type="button">
+          <span class="nav-icon">03</span><span>下载器</span><span class="nav-kbd">Get</span>
+        </button>
+        <button class="nav-btn" data-page="terminal" type="button">
+          <span class="nav-icon">04</span><span>命令行</span><span class="nav-kbd">Shell</span>
+        </button>
+        <button class="nav-btn" data-page="settings" type="button">
+          <span class="nav-icon">05</span><span>设置</span><span class="nav-kbd">Cfg</span>
+        </button>
+      </nav>
+
+      <div class="side-foot">
+        <div class="local-dot">仅本机访问</div>
+        <div>127.0.0.1:8848</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="crumb">
+          <small id="sectionHint">控制器 / 容器状态</small>
+          <h1 id="pageTitle">控制器</h1>
+        </div>
+        <div class="top-actions">
+          <span class="chip">容器 <strong>comfyui</strong></span>
+          <span class="chip">镜像 <strong>comfyui:stable</strong></span>
+          <span class="chip">端口 <strong>8188</strong></span>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="page active" id="page-controller" aria-labelledby="controller-title">
+          <div class="grid-2">
+            <div class="panel">
+              <div class="panel-head">
+                <div class="panel-title">
+                  <strong id="controller-title">容器控制</strong>
+                  <span>启动、停止和实时日志入口</span>
+                </div>
+                <span class="chip">上次刷新 <strong id="statusTime">刚刚</strong></span>
+              </div>
+              <div class="panel-body">
+                <div class="status-box">
+                  <div class="status-main">
+                    <span class="status-led" id="statusLed"></span>
+                    <div class="status-copy">
+                      <strong id="statusText">运行中</strong>
+                      <span id="statusMeta">ComfyUI 可通过 http://localhost:8188 访问</span>
+                    </div>
+                  </div>
+                  <button class="btn" id="refreshStatus" type="button">刷新状态</button>
+                </div>
+
+                <div class="health-grid">
+                  <div class="metric">
+                    <span>容器名</span>
+                    <strong>comfyui</strong>
+                  </div>
+                  <div class="metric">
+                    <span>网络模式</span>
+                    <strong>host</strong>
+                  </div>
+                  <div class="metric">
+                    <span>ComfyUI 端口</span>
+                    <strong>8188</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head">
+                <div class="panel-title">
+                  <strong>快捷操作</strong>
+                  <span>按钮先接页面动作，后续接真实后端</span>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div class="action-row">
+                  <button class="action-btn" id="startContainer" type="button">
+                    <span class="action-symbol">ON</span>
+                    <span class="action-copy"><strong>启动 / 唤醒容器</strong><span>唤醒已存在的 comfyui</span></span>
+                  </button>
+                  <button class="action-btn danger" id="stopContainer" type="button">
+                    <span class="action-symbol">X</span>
+                    <span class="action-copy"><strong>停止容器</strong><span>请求 Docker 正常停止</span></span>
+                  </button>
+                  <button class="action-btn" id="restartContainer" type="button">
+                    <span class="action-symbol">RS</span>
+                    <span class="action-copy"><strong>重启容器</strong><span>执行 docker restart comfyui</span></span>
+                  </button>
+                  <button class="action-btn" id="showLogs" type="button">
+                    <span class="action-symbol">&gt;_</span>
+                    <span class="action-copy"><strong>查看日志</strong><span>跳到命令行并输出日志</span></span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="notice">
+            当前只是网页壳：真实版本的“启动 / 唤醒”只会接入已存在容器的 docker start 逻辑，并把输出流送进命令行页面。
+          </div>
+        </section>
+
+        <section class="page" id="page-manager" aria-labelledby="manager-title">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-title">
+                <strong id="manager-title">存储空间</strong>
+                <span>示例数据，后续由系统磁盘信息实时填充</span>
+              </div>
+              <span class="chip">挂载 <strong>/home</strong></span>
+            </div>
+            <div class="panel-body">
+              <div class="storage">
+                <div class="storage-top">
+                  <span>当前可用空间</span>
+                  <span><strong>1.42 TB</strong> / 3.84 TB</span>
+                </div>
+                <div class="bar" aria-label="存储空间使用进度"><span></span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-title">
+                <strong>文件夹管理</strong>
+                <span>默认数据目录：custom_nodes / output / input / user，双击文件夹进入</span>
+              </div>
+              <button class="btn warn" id="openPathTerminal" type="button">在当前目录打开命令行</button>
+            </div>
+            <div class="panel-body">
+              <div class="path-row">
+                <input class="input" id="pathInput" value="/home/simonsyoyo/Comfyui/comfy_container_data" aria-label="目录路径">
+                <button class="btn primary" id="visitPath" type="button">访问目录</button>
+                <button class="btn" id="parentPath" type="button">上一级</button>
+              </div>
+            </div>
+            <table class="file-table" aria-label="当前目录文件列表">
+              <thead>
+                <tr>
+                  <th style="width: 36%">名称</th>
+                  <th style="width: 14%">类型</th>
+                  <th style="width: 16%">大小</th>
+                  <th style="width: 20%">修改时间</th>
+                  <th style="width: 14%">操作</th>
+                </tr>
+              </thead>
+              <tbody id="fileRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="page" id="page-downloader" aria-labelledby="downloader-title">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-title">
+                <strong id="downloader-title">下载器</strong>
+                <span>选择目录和下载方式后生成命令</span>
+              </div>
+              <span class="chip">方式 <strong>wget / git clone / git pull</strong></span>
+            </div>
+            <div class="panel-body">
+              <div class="settings-grid">
+                <div class="field">
+                  <label for="downloadDirPreset">下载目录</label>
+                  <select class="input" id="downloadDirPreset" aria-label="下载目录">
+                    <option value="/home/simonsyoyo/Comfyui/ComfyUI/models/checkpoints">models/checkpoints</option>
+                    <option value="/home/simonsyoyo/Comfyui/ComfyUI/models/loras">models/loras</option>
+                    <option value="/home/simonsyoyo/Comfyui/ComfyUI/models/vae">models/vae</option>
+                    <option value="/home/simonsyoyo/Comfyui/comfy_container_data/custom_nodes">data/custom_nodes</option>
+                    <option value="/home/simonsyoyo/Comfyui/comfy_container_data/input">data/input</option>
+                    <option value="/home/simonsyoyo/Comfyui/comfy_container_data/output">data/output</option>
+                    <option value="/home/simonsyoyo/Comfyui/comfy_container_data/user">data/user</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="downloadMethod">下载方式</label>
+                  <select class="input" id="downloadMethod" aria-label="下载方式">
+                    <option value="wget">wget 下载文件</option>
+                    <option value="git clone">git clone 下载仓库</option>
+                    <option value="git pull">git pull 更新目录</option>
+                  </select>
+                </div>
+                <div class="field wide">
+                  <label for="downloadDirInput">实际目录</label>
+                  <input class="input" id="downloadDirInput" value="/home/simonsyoyo/Comfyui/ComfyUI/models/checkpoints" aria-label="实际下载目录">
+                </div>
+                <div class="field wide">
+                  <label for="downloadUrl">下载地址</label>
+                  <input class="input" id="downloadUrl" placeholder="粘贴 wget 或 git clone 地址" aria-label="下载地址">
+                </div>
+              </div>
+
+              <div class="download-form" style="margin-top: 16px;">
+                <div class="download-preview" id="downloadPreview">cd '/home/simonsyoyo/Comfyui/ComfyUI/models/checkpoints' && wget '下载地址'</div>
+                <button class="btn primary" id="startDownload" type="button">开始下载</button>
+              </div>
+
+              <div class="download-list" id="downloadList">
+                <div class="download-empty">
+                  暂无下载任务
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-title">
+                <strong>Clash Verge 代理</strong>
+                <span>下载任务使用本机代理状态</span>
+              </div>
+              <span class="chip">本机 <strong>127.0.0.1</strong></span>
+            </div>
+            <div class="panel-body">
+              <div class="proxy-grid">
+                <div class="proxy-state">
+                  <strong id="clashProxyStatus">代理已关闭</strong>
+                  <span id="clashModeStatus">Clash Verge：未检测；接口：未检测；当前模式：规则</span>
+                </div>
+                <div class="proxy-buttons">
+                  <button class="btn" id="detectClashApi" type="button">检测接口</button>
+                  <button class="btn" id="startClashVerge" type="button">启动 Clash Verge</button>
+                  <button class="btn warn" id="stopClashVerge" type="button">停止 Clash Verge</button>
+                  <button class="btn primary" id="toggleClashProxy" type="button">开启全局代理</button>
+                </div>
+              </div>
+              <div style="margin-top: 14px;">
+                <div class="segmented" aria-label="Clash Verge 模式">
+                  <button class="seg-btn active" data-clash-mode="rule" type="button">规则</button>
+                  <button class="seg-btn" data-clash-mode="global" type="button">全局</button>
+                  <button class="seg-btn" data-clash-mode="direct" type="button">直连</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" id="page-terminal" aria-labelledby="terminal-title">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-title">
+                <strong id="terminal-title">命令行</strong>
+                <span id="terminalCount">普通 0/4，固定输出 2 个</span>
+              </div>
+              <div class="terminal-actions">
+                <button class="btn warn" id="enterDockerBash" type="button">进入 Docker bash</button>
+                <button class="btn primary" id="newTerminal" type="button">新建命令行</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="terminal-layout">
+                <div class="terminal-side" id="terminalTabs"></div>
+                <div class="terminal-box">
+                  <div class="terminal-head">
+                    <span id="activeTermTitle">日志 / docker logs -f comfyui</span>
+                    <span id="activeTermState">running</span>
+                  </div>
+                  <pre class="terminal-output" id="terminalOutput"></pre>
+                  <div class="terminal-input">
+                    <span id="promptPath">/home/simonsyoyo/Comfyui/comfy_container_data $</span>
+                    <input id="terminalCommand" aria-label="命令输入" autocomplete="off" spellcheck="false" placeholder="输入命令后按 Enter">
+                    <button class="btn" id="sendCommand" type="button">发送</button>
+                  </div>
+                  <div class="terminal-controls" id="terminalControls" aria-label="控制命令按钮"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" id="page-settings" aria-labelledby="settings-title">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-title">
+                <strong id="settings-title">设置</strong>
+                <span>本机监听、默认路径和命令行按钮</span>
+              </div>
+              <button class="btn primary" id="saveSettings" type="button">保存设置</button>
+            </div>
+            <div class="panel-body">
+              <div class="settings-grid">
+                <div class="field">
+                  <label for="bindHost">监听地址</label>
+                  <input class="input" id="bindHost" value="127.0.0.1">
+                </div>
+                <div class="field">
+                  <label for="bindPort">网页端口</label>
+                  <input class="input" id="bindPort" value="8848">
+                </div>
+                <div class="field">
+                  <label for="containerName">容器名</label>
+                  <input class="input" id="containerName" value="comfyui">
+                </div>
+                <div class="field">
+                  <label for="imageName">镜像名</label>
+                  <input class="input" id="imageName" value="comfyui:stable">
+                </div>
+                <div class="field">
+                  <label for="modelsPath">模型目录</label>
+                  <input class="input" id="modelsPath" value="/home/simonsyoyo/Comfyui/ComfyUI/models">
+                </div>
+                <div class="field">
+                  <label for="dataRootPath">数据目录</label>
+                  <input class="input" id="dataRootPath" value="/home/simonsyoyo/Comfyui/comfy_container_data">
+                </div>
+                <div class="field">
+                  <label for="outputPath">输出目录</label>
+                  <input class="input" id="outputPath" value="/home/simonsyoyo/Comfyui/comfy_container_data/output">
+                </div>
+                <div class="field">
+                  <label for="customNodesPath">插件目录</label>
+                  <input class="input" id="customNodesPath" value="/home/simonsyoyo/Comfyui/comfy_container_data/custom_nodes">
+                </div>
+                <div class="field">
+                  <label for="inputPath">输入目录</label>
+                  <input class="input" id="inputPath" value="/home/simonsyoyo/Comfyui/comfy_container_data/input">
+                </div>
+                <div class="field">
+                  <label for="userPath">用户目录</label>
+                  <input class="input" id="userPath" value="/home/simonsyoyo/Comfyui/comfy_container_data/user">
+                </div>
+                <div class="field">
+                  <label for="clashControllerUrl">Clash 控制接口</label>
+                  <input class="input" id="clashControllerUrl" value="http://127.0.0.1:9090">
+                </div>
+                <div class="field">
+                  <label for="clashSecret">Clash API 密钥</label>
+                  <input class="input" id="clashSecret" value="" placeholder="没有 secret 可留空">
+                </div>
+                <div class="field">
+                  <label for="clashStartCommand">Clash Verge 启动命令</label>
+                  <input class="input" id="clashStartCommand" value="clash-verge">
+                </div>
+                <div class="field">
+                  <label for="clashStopCommand">Clash Verge 停止命令</label>
+                  <input class="input" id="clashStopCommand" value="pkill -TERM -f 'clash-verge|Clash Verge'">
+                </div>
+                <div class="field wide">
+                  <label for="controlButtonsInput">命令行底部控制按钮</label>
+                  <textarea class="input textarea" id="controlButtonsInput" spellcheck="false">Ctrl+C 中断
+Ctrl+D 结束输入
+Ctrl+Z 挂起
+Ctrl+L 清屏
+Tab 补全
+Esc 取消</textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const APP_ROOT = "/home/simonsyoyo/Comfyui";
+    const DATA_ROOT = "/home/simonsyoyo/Comfyui/comfy_container_data";
+
+    const pageMeta = {
+      controller: ["控制器", "控制器 / 容器状态"],
+      manager: ["管理器", "管理器 / 文件与存储"],
+      downloader: ["下载器", "下载器 / 任务与代理"],
+      terminal: ["命令行", "命令行 / 固定输出与普通会话"],
+      settings: ["设置", "设置 / 本机服务与按钮"]
+    };
+
+    const baseFiles = [
+      { name: "custom_nodes", type: "DIR", size: "-", time: "2026-07-24 20:42" },
+      { name: "output", type: "DIR", size: "-", time: "2026-07-24 20:12" },
+      { name: "input", type: "DIR", size: "-", time: "2026-07-24 19:48" },
+      { name: "user", type: "DIR", size: "-", time: "2026-07-24 19:30" }
+    ];
+
+    let currentFiles = [...baseFiles];
+    let controlButtons = ["Ctrl+C 中断", "Ctrl+D 结束输入", "Ctrl+Z 挂起", "Ctrl+L 清屏", "Tab 补全", "Esc 取消"];
+    let downloadSeq = 0;
+    let downloadItems = [];
+
+    let status = "running";
+    let activeTerminalId = "downloads";
+    let terminalSeq = 0;
+    let sessions = [
+      {
+        id: "downloads",
+        title: "下载器输出",
+        cwd: "/home/simonsyoyo/Comfyui/ComfyUI/models/checkpoints",
+        state: "fixed",
+        closable: false,
+        kind: "fixed",
+        output: [
+          "[downloader] fixed output session.",
+          "[downloader] 下载、更新和代理切换日志会输出在这里。"
+        ].join("\n")
+      },
+      {
+        id: "logs",
+        title: "容器日志",
+        cwd: APP_ROOT,
+        state: "running",
+        closable: false,
+        kind: "fixed",
+        output: [
+          "[comfyui] Web shell ready.",
+          "[docker] logs -f comfyui",
+          "[ComfyUI] Listening on 0.0.0.0:8188"
+        ].join("\n")
+      }
+    ];
+    let clashProxyEnabled = false;
+    let clashMode = "rule";
+    let clashAppRunning = null;
+    let clashApiDetected = null;
+
+    const navButtons = [...document.querySelectorAll(".nav-btn")];
+    const pages = [...document.querySelectorAll(".page")];
+    const pageTitle = document.getElementById("pageTitle");
+    const sectionHint = document.getElementById("sectionHint");
+    const statusLed = document.getElementById("statusLed");
+    const statusText = document.getElementById("statusText");
+    const statusMeta = document.getElementById("statusMeta");
+    const toast = document.getElementById("toast");
+    let apiAvailable = false;
+    const sessionStreams = new Map();
+
+    async function apiFetch(path, options = {}) {
+      const init = { ...options };
+      init.headers = { ...(init.headers || {}) };
+      if (init.body && !init.headers["Content-Type"]) init.headers["Content-Type"] = "application/json";
+      const response = await fetch(path, init);
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : null;
+      if (!response.ok) throw new Error(data?.error || response.statusText);
+      return data;
+    }
+
+    async function detectBackend() {
+      try {
+        await apiFetch("/api/health");
+        apiAvailable = true;
+        await Promise.allSettled([
+          refreshContainerStatus(),
+          loadFiles(getCurrentPath()),
+          refreshSessions(),
+          refreshClashState()
+        ]);
+        showToast("已连接本机后端。");
+      } catch {
+        apiAvailable = false;
+      }
+    }
+
+    async function refreshContainerStatus() {
+      if (!apiAvailable) return;
+      const data = await apiFetch("/api/container/status");
+      updateStatus(data.status === "missing" ? "missing" : data.status);
+    }
+
+    function switchPage(page) {
+      navButtons.forEach(btn => btn.classList.toggle("active", btn.dataset.page === page));
+      pages.forEach(view => view.classList.toggle("active", view.id === `page-${page}`));
+      pageTitle.textContent = pageMeta[page][0];
+      sectionHint.textContent = pageMeta[page][1];
+      if (page === "terminal") renderTerminal();
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 3200);
+    }
+
+    function stamp() {
+      return new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function getCurrentPath() {
+      return document.getElementById("pathInput").value.trim() || "/";
+    }
+
+    function joinPath(base, name) {
+      const cleanBase = base.replace(/\/+$/, "");
+      return `${cleanBase || ""}/${name}`.replace(/\/+/g, "/");
+    }
+
+    function dockerShellQuote(path) {
+      return `'${String(path).replaceAll("'", "'\\''")}'`;
+    }
+
+    function updateStatus(nextStatus) {
+      status = nextStatus;
+      statusLed.className = "status-led";
+      if (status === "running") {
+        statusText.textContent = "运行中";
+        statusMeta.textContent = "ComfyUI 可通过 http://localhost:8188 访问";
+      } else if (status === "stopped") {
+        statusLed.classList.add("stopped");
+        statusText.textContent = "已停止";
+        statusMeta.textContent = "容器存在，但当前没有运行";
+      } else {
+        statusLed.classList.add("missing");
+        statusText.textContent = "未检测到";
+        statusMeta.textContent = "没有检测到已准备好的 comfyui 容器";
+      }
+      document.getElementById("statusTime").textContent = stamp();
+    }
+
+    function appendToSession(id, lines) {
+      const session = sessions.find(item => item.id === id);
+      if (!session) return;
+      session.output += `\n${lines}`;
+      if (activeTerminalId === id) renderTerminal();
+    }
+
+    function ensureLogsSession() {
+      let logs = sessions.find(item => item.id === "logs");
+      if (!logs) {
+        logs = {
+          id: "logs",
+          title: "容器日志",
+          cwd: APP_ROOT,
+          state: "running",
+          closable: false,
+          kind: "fixed",
+          output: "[docker] logs -f comfyui"
+        };
+        sessions.unshift(logs);
+      }
+      activeTerminalId = "logs";
+      logs.state = "running";
+    }
+
+    function renderFiles() {
+      const rows = document.getElementById("fileRows");
+      rows.innerHTML = currentFiles.map((file, index) => `
+        <tr data-index="${index}" data-kind="${file.type}">
+          <td><span class="name-cell"><span class="type-badge">${file.type}</span><span>${escapeHtml(file.name)}</span></span></td>
+          <td>${file.type === "DIR" ? "文件夹" : "文件"}</td>
+          <td>${escapeHtml(file.sizeText || file.size)}</td>
+          <td>${escapeHtml(file.time || file.modTime || "")}</td>
+          <td><button class="delete-file" data-delete="${index}" type="button">Docker 删除</button></td>
+        </tr>
+      `).join("");
+
+      rows.querySelectorAll("tr[data-kind='DIR']").forEach(row => {
+        row.addEventListener("dblclick", () => enterFolder(Number(row.dataset.index)));
+      });
+
+      rows.querySelectorAll("[data-delete]").forEach(btn => {
+        btn.addEventListener("click", event => {
+          event.stopPropagation();
+          deleteFileInDocker(Number(btn.dataset.delete));
+        });
+      });
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes < 0) return "-";
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let value = Number(bytes);
+      let index = 0;
+      while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index += 1;
+      }
+      return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+    }
+
+    async function loadFiles(path) {
+      if (!apiAvailable) {
+        currentFiles = [...baseFiles];
+        renderFiles();
+        return;
+      }
+      const data = await apiFetch(`/api/files/list?path=${encodeURIComponent(path)}`);
+      document.getElementById("pathInput").value = data.path;
+      currentFiles = data.entries.map(item => ({
+        ...item,
+        sizeText: item.type === "DIR" ? "-" : formatBytes(item.size),
+        time: item.modTime ? new Date(item.modTime).toLocaleString("zh-CN", { hour12: false }) : ""
+      }));
+      renderFiles();
+    }
+
+    async function enterFolder(index) {
+      const file = currentFiles[index];
+      if (!file || file.type !== "DIR") return;
+      const input = document.getElementById("pathInput");
+      input.value = joinPath(getCurrentPath(), file.name);
+      if (apiAvailable) {
+        await loadFiles(file.path || input.value);
+        showToast(`已进入：${input.value}`);
+        return;
+      }
+      const children = {
+        custom_nodes: [
+          { name: "ComfyUI-Manager", type: "DIR", size: "-", time: "2026-07-24 18:22" },
+          { name: "rgthree-comfy", type: "DIR", size: "-", time: "2026-07-23 17:40" },
+          { name: "README.md", type: "FILE", size: "4.1 KB", time: "2026-07-22 09:15" }
+        ],
+        output: [
+          { name: "2026-07-25", type: "DIR", size: "-", time: "2026-07-25 10:12" },
+          { name: "ComfyUI_00001.png", type: "FILE", size: "1.8 MB", time: "2026-07-24 22:08" }
+        ],
+        input: [
+          { name: "reference.png", type: "FILE", size: "856 KB", time: "2026-07-24 19:18" },
+          { name: "mask.png", type: "FILE", size: "214 KB", time: "2026-07-24 19:16" }
+        ],
+        user: [
+          { name: "default", type: "DIR", size: "-", time: "2026-07-24 20:01" },
+          { name: "settings.json", type: "FILE", size: "2.3 KB", time: "2026-07-24 19:58" }
+        ]
+      };
+      currentFiles = children[file.name] || [
+        { name: "example", type: "DIR", size: "-", time: "2026-07-24 19:44" },
+        { name: `${file.name.toLowerCase()}_note.txt`, type: "FILE", size: "1.1 KB", time: "2026-07-22 15:20" }
+      ];
+      renderFiles();
+      showToast(`已进入：${input.value}`);
+    }
+
+    async function deleteFileInDocker(index) {
+      const file = currentFiles[index];
+      if (!file) return;
+      const targetPath = file.path || joinPath(getCurrentPath(), file.name);
+      if (!window.confirm(`确认通过 Docker 环境删除？\n${targetPath}`)) return;
+      if (apiAvailable) {
+        await apiFetch("/api/files/delete", { method: "POST", body: JSON.stringify({ path: targetPath }) });
+        await loadFiles(getCurrentPath());
+        await refreshSessions();
+        switchPage("terminal");
+        showToast("已通过 Docker 环境删除。");
+        return;
+      }
+      const command = `docker exec comfyui rm -rf ${dockerShellQuote(targetPath)}`;
+      currentFiles = currentFiles.filter((_, itemIndex) => itemIndex !== index);
+      ensureLogsSession();
+      appendToSession("logs", `[${stamp()}] Docker 删除\n[docker] ${command}\n[ok] 已从列表移除：${targetPath}`);
+      renderFiles();
+      switchPage("terminal");
+      showToast("删除动作已写入命令行，真实后端会在 Docker 内执行。");
+    }
+
+    function terminalLimitText() {
+      const userCount = sessions.filter(item => item.kind !== "fixed").length;
+      const fixedCount = sessions.length - userCount;
+      document.getElementById("terminalCount").textContent = `普通 ${userCount}/4，固定输出 ${fixedCount} 个`;
+      document.getElementById("newTerminal").disabled = userCount >= 4;
+      document.getElementById("enterDockerBash").disabled = userCount >= 4;
+    }
+
+    async function refreshSessions() {
+      if (!apiAvailable) return;
+      const remote = await apiFetch("/api/terminal/sessions");
+      const old = new Map(sessions.map(item => [item.id, item]));
+      sessions = remote.map(item => ({
+        id: item.id,
+        title: item.title,
+        cwd: item.cwd,
+        state: item.running ? "running" : (item.fixed ? "fixed" : "idle"),
+        closable: item.closable,
+        kind: item.fixed ? "fixed" : "user",
+        output: old.get(item.id)?.output || ""
+      }));
+      sessions.forEach(item => connectSessionStream(item.id));
+      if (!sessions.some(item => item.id === activeTerminalId)) {
+        activeTerminalId = sessions[0]?.id || "";
+      }
+      renderTerminal();
+    }
+
+    function connectSessionStream(id) {
+      if (!apiAvailable || sessionStreams.has(id)) return;
+      const source = new EventSource(`/api/terminal/stream?id=${encodeURIComponent(id)}`);
+      sessionStreams.set(id, source);
+      source.onmessage = event => {
+        const session = sessions.find(item => item.id === id);
+        if (!session) return;
+        session.output += `${session.output ? "\n" : ""}${event.data}`;
+        if (activeTerminalId === id) renderTerminal();
+      };
+      source.onerror = () => {
+        source.close();
+        sessionStreams.delete(id);
+      };
+    }
+
+    function renderControlButtons() {
+      const target = document.getElementById("terminalControls");
+      target.innerHTML = controlButtons.map(label => `
+        <button class="control-key" data-control="${escapeHtml(label)}" type="button">${escapeHtml(label)}</button>
+      `).join("");
+
+      target.querySelectorAll("[data-control]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const active = sessions.find(item => item.id === activeTerminalId);
+          if (!active) return;
+          const control = btn.dataset.control;
+          if (apiAvailable) {
+            try {
+              await apiFetch("/api/terminal/control", { method: "POST", body: JSON.stringify({ id: active.id, control }) });
+            } catch (error) {
+              showToast(error.message);
+            }
+            return;
+          }
+          if (control.startsWith("Ctrl+L")) {
+            active.output = `[control] ${control}`;
+          } else {
+            active.output += `\n[control] ${control}`;
+          }
+          renderTerminal();
+        });
+      });
+    }
+
+    function renderTerminalTabs() {
+      const target = document.getElementById("terminalTabs");
+      target.innerHTML = sessions.map(session => `
+        <div class="term-tab ${session.id === activeTerminalId ? "active" : ""}">
+          <button class="term-select" data-term="${session.id}" type="button">
+            <strong>${session.title}</strong>
+            <span>${session.cwd}</span>
+          </button>
+          ${session.closable ? `<button class="close-term" data-close="${session.id}" type="button" aria-label="关闭 ${session.title}">x</button>` : `<span class="type-badge">常驻</span>`}
+        </div>
+      `).join("");
+
+      target.querySelectorAll("[data-term]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          activeTerminalId = btn.dataset.term;
+          renderTerminal();
+        });
+      });
+
+      target.querySelectorAll("[data-close]").forEach(btn => {
+        btn.addEventListener("click", event => {
+          event.stopPropagation();
+          closeTerminal(btn.dataset.close);
+        });
+      });
+    }
+
+    function renderTerminal() {
+      if (!sessions.some(item => item.id === activeTerminalId)) {
+        activeTerminalId = sessions[0]?.id || "";
+      }
+      const active = sessions.find(item => item.id === activeTerminalId);
+      renderTerminalTabs();
+      terminalLimitText();
+      renderControlButtons();
+      if (!active) return;
+      document.getElementById("activeTermTitle").textContent = `${active.title} / ${active.cwd}`;
+      document.getElementById("activeTermState").textContent = active.state;
+      document.getElementById("promptPath").textContent = `${active.cwd} $`;
+      const output = document.getElementById("terminalOutput");
+      output.textContent = active.output;
+      output.scrollTop = output.scrollHeight;
+    }
+
+    async function closeTerminal(id) {
+      const session = sessions.find(item => item.id === id);
+      if (!session) return;
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/terminal/close", { method: "POST", body: JSON.stringify({ id }) });
+          sessionStreams.get(id)?.close();
+          sessionStreams.delete(id);
+          await refreshSessions();
+          showToast("命令行已关闭。");
+        } catch (error) {
+          showToast(`关闭失败：${error.message}`);
+        }
+        return;
+      }
+      if (session.state === "running" || !session.closable) {
+        showToast("关闭失败：该命令行仍在运行任务，已保留会话，没有强行关闭。");
+        return;
+      }
+      sessions = sessions.filter(item => item.id !== id);
+      if (activeTerminalId === id) activeTerminalId = sessions[0]?.id || "";
+      renderTerminal();
+      showToast("命令行已关闭。");
+    }
+
+    async function createTerminal(cwd = DATA_ROOT) {
+      if (apiAvailable) {
+        try {
+          const data = await apiFetch("/api/terminal/create", { method: "POST", body: JSON.stringify({ cwd }) });
+          activeTerminalId = data.id;
+          await refreshSessions();
+          switchPage("terminal");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      if (sessions.filter(item => item.kind !== "fixed").length >= 4) {
+        showToast("最多只能同时打开 4 个命令行。");
+        return;
+      }
+      terminalSeq += 1;
+      const id = `term-${terminalSeq}`;
+      sessions.push({
+        id,
+        title: `命令行 ${terminalSeq}`,
+        cwd,
+        state: "idle",
+        closable: true,
+        kind: "user",
+        output: `$ cd ${cwd}\n${cwd} $`
+      });
+      activeTerminalId = id;
+      switchPage("terminal");
+      renderTerminal();
+    }
+
+    async function enterDockerBash() {
+      if (apiAvailable) {
+        try {
+          const data = await apiFetch("/api/terminal/docker-bash", { method: "POST", body: "{}" });
+          activeTerminalId = data.id;
+          await refreshSessions();
+          switchPage("terminal");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      if (sessions.filter(item => item.kind !== "fixed").length >= 4) {
+        showToast("最多只能同时打开 4 个命令行。");
+        return;
+      }
+      terminalSeq += 1;
+      const id = `docker-bash-${terminalSeq}`;
+      sessions.push({
+        id,
+        title: "Docker bash",
+        cwd: "/opt/ComfyUI",
+        state: "running",
+        closable: false,
+        kind: "user",
+        output: [
+          "$ docker exec -it comfyui bash",
+          "root@comfyui:/opt/ComfyUI#",
+          "[web-shell] 真实后端会把这里连接到容器内 bash。"
+        ].join("\n")
+      });
+      activeTerminalId = id;
+      switchPage("terminal");
+      renderTerminal();
+      showToast("已进入 Docker bash 会话示例。");
+    }
+
+    async function sendTerminalCommand() {
+      const active = sessions.find(item => item.id === activeTerminalId);
+      const input = document.getElementById("terminalCommand");
+      const command = input.value.trim();
+      if (!active || !command) return;
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/terminal/input", { method: "POST", body: JSON.stringify({ id: active.id, data: command }) });
+          input.value = "";
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      active.output += `\n$ ${command}\n[web-shell] 这里将接入真实 PTY 输出。`;
+      input.value = "";
+      renderTerminal();
+    }
+
+    function getDownloadCommand() {
+      const method = document.getElementById("downloadMethod").value;
+      const dir = document.getElementById("downloadDirInput").value.trim() || "/";
+      const url = document.getElementById("downloadUrl").value.trim();
+      const env = proxyEnvPrefix();
+      if (method === "wget") return { method, dir, url, command: `cd ${dockerShellQuote(dir)} && ${env}wget ${dockerShellQuote(url || "下载地址")}` };
+      if (method === "git clone") return { method, dir, url, command: `cd ${dockerShellQuote(dir)} && ${env}git clone ${dockerShellQuote(url || "仓库地址")}` };
+      return { method, dir, url, command: `cd ${dockerShellQuote(dir)} && ${env}git pull` };
+    }
+
+    function renderDownloadPreview() {
+      const data = getDownloadCommand();
+      const urlInput = document.getElementById("downloadUrl");
+      const startButton = document.getElementById("startDownload");
+      if (data.method === "git pull") {
+        urlInput.disabled = true;
+        urlInput.value = "";
+        urlInput.placeholder = "git pull 不需要下载地址，会更新所选目录";
+        startButton.textContent = "开始更新";
+      } else {
+        urlInput.disabled = false;
+        urlInput.placeholder = data.method === "wget" ? "粘贴文件下载地址" : "粘贴 Git 仓库地址";
+        startButton.textContent = "开始下载";
+      }
+      document.getElementById("downloadPreview").textContent = data.command;
+    }
+
+    function ensureDownloadSession() {
+      let downloads = sessions.find(item => item.id === "downloads");
+      if (downloads) return downloads;
+      downloads = {
+        id: "downloads",
+        title: "下载器输出",
+        cwd: getDownloadCommand().dir,
+        state: "fixed",
+        closable: false,
+        kind: "fixed",
+        output: "[downloader] fixed output session."
+      };
+      sessions.unshift(downloads);
+      return downloads;
+    }
+
+    function renderDownloadList() {
+      const target = document.getElementById("downloadList");
+      if (!downloadItems.length) {
+        target.innerHTML = `<div class="download-empty">暂无下载任务</div>`;
+        return;
+      }
+      target.innerHTML = downloadItems.map(item => `
+        <div class="download-item">
+          <div>
+            <strong>${escapeHtml(item.method)} · ${escapeHtml(item.status)}</strong>
+            <span>${escapeHtml(item.command)}</span>
+          </div>
+          <span class="type-badge">#${item.id}</span>
+        </div>
+      `).join("");
+    }
+
+    async function startDownloadTask() {
+      const data = getDownloadCommand();
+      if ((data.method === "wget" || data.method === "git clone") && !data.url) {
+        showToast("请先粘贴下载地址。");
+        return;
+      }
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/download/start", {
+            method: "POST",
+            body: JSON.stringify({ method: data.method, dir: data.dir, url: data.url, useProxy: clashProxyEnabled })
+          });
+          await refreshSessions();
+          showToast(data.method === "git pull" ? "更新任务已加入后端队列。" : "下载任务已加入后端队列。");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      downloadSeq += 1;
+      const item = {
+        id: downloadSeq,
+        method: data.method,
+        dir: data.dir,
+        url: data.url,
+        command: data.command,
+        status: "等待执行"
+      };
+      downloadItems.unshift(item);
+      renderDownloadList();
+
+      const session = ensureDownloadSession();
+      if (session) {
+        session.cwd = data.dir;
+        session.output += `\n[${stamp()}] 下载任务 #${item.id}\n$ ${data.command}\n[web-shell] 真实后端会在这里输出 ${data.method} 结果。`;
+      } else {
+        showToast("任务已加入下载队列；命令行已满，暂未创建下载输出会话。");
+        return;
+      }
+      renderTerminal();
+      showToast(data.method === "git pull" ? "更新任务已加入队列。" : "下载任务已加入队列。");
+    }
+
+    function clashModeLabel(mode) {
+      return { rule: "规则", global: "全局", direct: "直连" }[mode] || mode;
+    }
+
+    function clashRuntimeLabel(value) {
+      if (value === true) return "运行中";
+      if (value === false) return "已停止";
+      return "未检测";
+    }
+
+    function clashApiLabel(value) {
+      if (value === true) return "可用";
+      if (value === false) return "不可用";
+      return "未检测";
+    }
+
+    function getClashConfig() {
+      return {
+        controllerUrl: document.getElementById("clashControllerUrl").value.trim().replace(/\/+$/, "") || "http://127.0.0.1:9090",
+        secret: document.getElementById("clashSecret").value.trim(),
+        startCommand: document.getElementById("clashStartCommand").value.trim() || "clash-verge",
+        stopCommand: document.getElementById("clashStopCommand").value.trim() || "pkill -TERM -f 'clash-verge|Clash Verge'"
+      };
+    }
+
+    function proxyEnvPrefix() {
+      return clashProxyEnabled
+        ? "HTTP_PROXY=http://127.0.0.1:7890 HTTPS_PROXY=http://127.0.0.1:7890 ALL_PROXY=socks5://127.0.0.1:7891 "
+        : "";
+    }
+
+    function clashAuthHeader(secret) {
+      return secret ? ` -H ${dockerShellQuote(`Authorization: Bearer ${secret}`)}` : "";
+    }
+
+    function clashCurl(method, path, body = "") {
+      const config = getClashConfig();
+      const data = body ? ` -H 'Content-Type: application/json' -d ${dockerShellQuote(body)}` : "";
+      return `curl -sS -X ${method}${clashAuthHeader(config.secret)}${data} ${dockerShellQuote(`${config.controllerUrl}${path}`)}`;
+    }
+
+    function appendDownloaderOutput(lines) {
+      const session = ensureDownloadSession();
+      session.output += `\n${lines}`;
+      if (activeTerminalId === session.id) renderTerminal();
+    }
+
+    function renderClashControls() {
+      document.getElementById("clashProxyStatus").textContent = clashProxyEnabled ? "全局代理已开启" : "全局代理已关闭";
+      document.getElementById("clashModeStatus").textContent = `Clash Verge：${clashRuntimeLabel(clashAppRunning)}；接口：${clashApiLabel(clashApiDetected)}；当前模式：${clashModeLabel(clashMode)}`;
+      document.getElementById("toggleClashProxy").textContent = clashProxyEnabled ? "关闭全局代理" : "开启全局代理";
+      document.querySelectorAll("[data-clash-mode]").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.clashMode === clashMode);
+      });
+    }
+
+    async function refreshClashState() {
+      if (!apiAvailable) return;
+      const data = await apiFetch("/api/clash/state");
+      clashProxyEnabled = !!data.downloadProxy;
+      clashMode = data.mode || clashMode;
+      clashApiDetected = data.apiChecked ? !!data.apiDetected : null;
+      clashAppRunning = data.appChecked ? !!data.appRunning : null;
+      renderClashControls();
+      renderDownloadPreview();
+    }
+
+    async function startClashVerge() {
+      const config = getClashConfig();
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/clash/start", { method: "POST", body: "{}" });
+          clashAppRunning = true;
+          await refreshSessions();
+          renderClashControls();
+          showToast("已请求后端启动 Clash Verge。");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      clashAppRunning = true;
+      appendDownloaderOutput(`[${stamp()}] 启动 Clash Verge\n[cmd] ${config.startCommand}\n[web-shell] 真实后端会以后台进程启动，并记录 PID 与日志。`);
+      renderClashControls();
+      showToast("已写入启动 Clash Verge 动作。");
+    }
+
+    async function stopClashVerge() {
+      const config = getClashConfig();
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/clash/stop", { method: "POST", body: "{}" });
+          clashAppRunning = false;
+          clashApiDetected = false;
+          await refreshSessions();
+          renderClashControls();
+          showToast("已请求后端停止 Clash Verge。");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      clashAppRunning = false;
+      clashApiDetected = false;
+      appendDownloaderOutput(`[${stamp()}] 停止 Clash Verge\n[cmd] ${config.stopCommand}\n[web-shell] 真实后端只发送正常终止请求，失败会反馈错误，不强杀。`);
+      renderClashControls();
+      showToast("已写入停止 Clash Verge 动作。");
+    }
+
+    async function detectClashApi() {
+      if (apiAvailable) {
+        try {
+          const data = await apiFetch("/api/clash/detect", { method: "POST", body: "{}" });
+          clashApiDetected = !!data.ok;
+          clashAppRunning = data.ok ? true : clashAppRunning;
+          await refreshSessions();
+          renderClashControls();
+          showToast(data.ok ? "Clash 控制接口可用。" : "暂未检测到 Clash 控制接口。");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      const config = getClashConfig();
+      appendDownloaderOutput(`[${stamp()}] 检测 Clash/Mihomo API\n[probe] ${clashCurl("GET", "/version")}`);
+      try {
+        const headers = config.secret ? { Authorization: `Bearer ${config.secret}` } : {};
+        const response = await fetch(`${config.controllerUrl}/version`, { headers });
+        clashApiDetected = response.ok;
+        clashAppRunning = response.ok ? true : clashAppRunning;
+        appendDownloaderOutput(`[result] ${response.ok ? "接口可用" : `接口返回 HTTP ${response.status}`}`);
+      } catch (error) {
+        clashApiDetected = false;
+        appendDownloaderOutput(`[result] 浏览器侧检测失败：${error.message}\n[note] 真实后端会从本机直接请求 external-controller，可避开浏览器 CORS 限制。`);
+      }
+      renderClashControls();
+      showToast(clashApiDetected ? "Clash 控制接口可用。" : "暂未检测到 Clash 控制接口。");
+    }
+
+    async function toggleClashProxy() {
+      clashProxyEnabled = !clashProxyEnabled;
+      if (apiAvailable) {
+        try {
+          const data = await apiFetch("/api/clash/proxy", { method: "POST", body: JSON.stringify({ enabled: clashProxyEnabled }) });
+          clashProxyEnabled = !!data.enabled;
+          await refreshSessions();
+        } catch (error) {
+          clashProxyEnabled = !clashProxyEnabled;
+          showToast(error.message);
+          return;
+        }
+      }
+      appendDownloaderOutput(`[${stamp()}] 下载代理\n[proxy] ${clashProxyEnabled ? "enable" : "disable"}\n[env] ${clashProxyEnabled ? "HTTP_PROXY/HTTPS_PROXY/ALL_PROXY will be applied to downloads" : "download proxy env disabled"}`);
+      renderClashControls();
+      renderDownloadPreview();
+      showToast(clashProxyEnabled ? "全局代理已开启。" : "全局代理已关闭。");
+    }
+
+    async function setClashMode(mode) {
+      clashMode = mode;
+      if (apiAvailable) {
+        try {
+          const data = await apiFetch("/api/clash/mode", { method: "POST", body: JSON.stringify({ mode }) });
+          clashMode = data.mode || mode;
+          await refreshSessions();
+        } catch (error) {
+          showToast(error.message);
+          renderClashControls();
+          return;
+        }
+      }
+      const body = JSON.stringify({ mode });
+      appendDownloaderOutput(`[${stamp()}] Clash/Mihomo 模式\n[api] ${clashCurl("PATCH", "/configs", body)}\n[mode] ${clashModeLabel(mode)}`);
+      renderClashControls();
+      showToast(`已切换到${clashModeLabel(mode)}模式。`);
+    }
+
+    navButtons.forEach(btn => btn.addEventListener("click", () => switchPage(btn.dataset.page)));
+
+    document.getElementById("refreshStatus").addEventListener("click", async () => {
+      if (apiAvailable) {
+        try {
+          await refreshContainerStatus();
+          showToast("状态已刷新。");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      updateStatus(status);
+      showToast("状态已刷新。");
+    });
+
+    document.getElementById("startContainer").addEventListener("click", async () => {
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/container/start", { method: "POST", body: "{}" });
+          await refreshContainerStatus();
+          await refreshSessions();
+          showToast("容器已唤醒。");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      updateStatus("running");
+      ensureLogsSession();
+      appendToSession("logs", `[${stamp()}] 启动 / 唤醒容器\n[docker] docker start comfyui\n[ok] 已唤醒已有容器`);
+      showToast("已写入启动动作示例。");
+    });
+
+    document.getElementById("stopContainer").addEventListener("click", async () => {
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/container/stop", { method: "POST", body: "{}" });
+          await refreshContainerStatus();
+          await refreshSessions();
+          showToast("容器已停止。");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      updateStatus("stopped");
+      appendToSession("logs", `[${stamp()}] 停止容器\n[docker] docker stop comfyui\n[ok] 容器已停止`);
+      showToast("已写入停止动作示例。");
+    });
+
+    document.getElementById("restartContainer").addEventListener("click", async () => {
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/container/restart", { method: "POST", body: "{}" });
+          await refreshContainerStatus();
+          await refreshSessions();
+          showToast("容器已重启。");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      updateStatus("running");
+      ensureLogsSession();
+      appendToSession("logs", `[${stamp()}] 重启容器\n[docker] docker restart comfyui\n[ok] 容器已重启`);
+      showToast("已写入重启动作示例。");
+    });
+
+    document.getElementById("showLogs").addEventListener("click", async () => {
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/container/logs/start", { method: "POST", body: "{}" });
+          activeTerminalId = "logs";
+          await refreshSessions();
+          switchPage("terminal");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      ensureLogsSession();
+      appendToSession("logs", `[${stamp()}] 查看日志\n[ComfyUI] prompt queue ready\n[ComfyUI] listening on 0.0.0.0:8188`);
+      switchPage("terminal");
+    });
+
+    document.getElementById("visitPath").addEventListener("click", async () => {
+      const path = document.getElementById("pathInput").value.trim() || "/";
+      if (apiAvailable) {
+        try {
+          await loadFiles(path);
+          showToast(`已访问：${path}`);
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      currentFiles = [...baseFiles];
+      showToast(`已访问：${path}`);
+      renderFiles();
+    });
+
+    document.getElementById("parentPath").addEventListener("click", async () => {
+      const input = document.getElementById("pathInput");
+      const clean = input.value.replace(/\/+$/, "");
+      input.value = clean.includes("/") ? clean.slice(0, clean.lastIndexOf("/")) || "/" : "/";
+      if (apiAvailable) {
+        try {
+          await loadFiles(input.value);
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      currentFiles = [...baseFiles];
+      renderFiles();
+    });
+
+    document.getElementById("openPathTerminal").addEventListener("click", () => {
+      const path = document.getElementById("pathInput").value.trim() || "/";
+      createTerminal(path);
+    });
+
+    document.getElementById("newTerminal").addEventListener("click", () => createTerminal());
+    document.getElementById("enterDockerBash").addEventListener("click", enterDockerBash);
+    document.getElementById("sendCommand").addEventListener("click", sendTerminalCommand);
+    document.getElementById("terminalCommand").addEventListener("keydown", event => {
+      if (event.key === "Enter") sendTerminalCommand();
+    });
+
+    document.getElementById("downloadDirPreset").addEventListener("change", event => {
+      document.getElementById("downloadDirInput").value = event.target.value;
+      renderDownloadPreview();
+    });
+
+    document.getElementById("downloadDirInput").addEventListener("input", renderDownloadPreview);
+    document.getElementById("downloadMethod").addEventListener("change", renderDownloadPreview);
+    document.getElementById("downloadUrl").addEventListener("input", renderDownloadPreview);
+    document.getElementById("startDownload").addEventListener("click", startDownloadTask);
+    document.getElementById("toggleClashProxy").addEventListener("click", toggleClashProxy);
+    document.getElementById("startClashVerge").addEventListener("click", startClashVerge);
+    document.getElementById("stopClashVerge").addEventListener("click", stopClashVerge);
+    document.getElementById("detectClashApi").addEventListener("click", detectClashApi);
+    document.querySelectorAll("[data-clash-mode]").forEach(btn => {
+      btn.addEventListener("click", () => setClashMode(btn.dataset.clashMode));
+    });
+
+    document.getElementById("saveSettings").addEventListener("click", () => {
+      const nextButtons = document.getElementById("controlButtonsInput").value
+        .split(/\r?\n/)
+        .map(item => item.trim())
+        .filter(Boolean)
+        .slice(0, 12);
+      controlButtons = nextButtons.length ? nextButtons : ["Ctrl+C 中断"];
+      renderControlButtons();
+      renderClashControls();
+      renderDownloadPreview();
+      showToast("设置已暂存到页面状态，命令行控制按钮已刷新。");
+    });
+
+    renderFiles();
+    renderDownloadPreview();
+    renderDownloadList();
+    renderClashControls();
+    renderTerminal();
+    updateStatus("running");
+    detectBackend();
+  </script>
+</body>
+</html>

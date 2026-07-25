@@ -1,0 +1,24 @@
+{
+  "bindHost": "127.0.0.1",
+  "port": 8848,
+  "containerName": "comfyui",
+  "appRoot": "/home/simonsyoyo/Comfyui",
+  "dataRoot": "/home/simonsyoyo/Comfyui/comfy_container_data",
+  "containerDataRoot": "/opt/ComfyUI",
+  "modelsPath": "/home/simonsyoyo/Comfyui/ComfyUI/models",
+  "downloadDirs": [
+    "/home/simonsyoyo/Comfyui/ComfyUI/models/checkpoints",
+    "/home/simonsyoyo/Comfyui/ComfyUI/models/loras",
+    "/home/simonsyoyo/Comfyui/ComfyUI/models/vae",
+    "/home/simonsyoyo/Comfyui/comfy_container_data/custom_nodes",
+    "/home/simonsyoyo/Comfyui/comfy_container_data/input",
+    "/home/simonsyoyo/Comfyui/comfy_container_data/output",
+    "/home/simonsyoyo/Comfyui/comfy_container_data/user"
+  ],
+  "clashControllerUrl": "http://127.0.0.1:9090",
+  "clashSecret": "",
+  "clashStartCommand": "clash-verge",
+  "clashStopCommand": "pkill -TERM -f 'clash-verge|Clash Verge'",
+  "httpProxy": "http://127.0.0.1:7890",
+  "socksProxy": "socks5://127.0.0.1:7891"
+}
