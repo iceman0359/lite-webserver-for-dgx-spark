@@ -64,18 +64,17 @@ jobs:
         run: |
           set -eux
           tag="${{ steps.meta.outputs.tag }}"
-          notes="$(cat <<'EOF'
-Lightweight local-only ComfyUI manager backend for DGX Spark / Ubuntu aarch64.
-
-Includes:
-- Linux arm64 single binary
-- default config example
-- startup and user-level systemd scripts
-- SHA256 checksum
-EOF
-)"
+          cat > release-notes.md <<'EOF'
+          Lightweight local-only ComfyUI manager backend for DGX Spark / Ubuntu aarch64.
+          
+          Includes:
+          - Linux arm64 single binary
+          - default config example
+          - startup and user-level systemd scripts
+          - SHA256 checksum
+          EOF
           gh release create "$tag" \
             comfyui-manager-linux-arm64.tar.gz \
             comfyui-manager-linux-arm64.sha256 \
             --title "$tag" \
-            --notes "$notes"
+            --notes-file release-notes.md
