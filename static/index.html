@@ -525,6 +525,12 @@
       background: #fff8e9;
     }
 
+    .btn.danger {
+      border-color: #d77777;
+      color: #8c1f1f;
+      background: #fff0f0;
+    }
+
     .storage {
       display: grid;
       gap: 10px;
@@ -1175,7 +1181,7 @@
               <div class="panel-head">
                 <div class="panel-title">
                   <strong>快捷操作</strong>
-                  <span>按钮先接页面动作，后续接真实后端</span>
+                  <span>只控制已存在的 comfyui 容器</span>
                 </div>
               </div>
               <div class="panel-body">
@@ -1201,9 +1207,6 @@
             </div>
           </div>
 
-          <div class="notice">
-            当前只是网页壳：真实版本的“启动 / 唤醒”只会接入已存在容器的 docker start 逻辑，并把输出流送进命令行页面。
-          </div>
         </section>
 
         <section class="page" id="page-manager" aria-labelledby="manager-title">
@@ -1211,17 +1214,17 @@
             <div class="panel-head">
               <div class="panel-title">
                 <strong id="manager-title">存储空间</strong>
-                <span>示例数据，后续由系统磁盘信息实时填充</span>
+                <span>仅允许访问 data 和 models 两个受管目录</span>
               </div>
-              <span class="chip">挂载 <strong>/home</strong></span>
+              <span class="chip">本机 <strong>受限访问</strong></span>
             </div>
             <div class="panel-body">
               <div class="storage">
                 <div class="storage-top">
-                  <span>当前可用空间</span>
-                  <span><strong>1.42 TB</strong> / 3.84 TB</span>
+                  <span id="storageScope">当前目录可用空间</span>
+                  <span><strong id="storageFree">-</strong> / <span id="storageTotal">-</span></span>
                 </div>
-                <div class="bar" aria-label="存储空间使用进度"><span></span></div>
+                <div class="bar" aria-label="存储空间使用进度"><span id="storageBar" style="width: 0%"></span></div>
               </div>
             </div>
           </div>
@@ -1270,13 +1273,7 @@
                 <div class="field">
                   <label for="downloadDirPreset">下载目录</label>
                   <select class="input" id="downloadDirPreset" aria-label="下载目录">
-                    <option value="/home/simonsyoyo/Comfyui/ComfyUI/models/checkpoints">models/checkpoints</option>
-                    <option value="/home/simonsyoyo/Comfyui/ComfyUI/models/loras">models/loras</option>
-                    <option value="/home/simonsyoyo/Comfyui/ComfyUI/models/vae">models/vae</option>
-                    <option value="/home/simonsyoyo/Comfyui/comfy_container_data/custom_nodes">data/custom_nodes</option>
-                    <option value="/home/simonsyoyo/Comfyui/comfy_container_data/input">data/input</option>
-                    <option value="/home/simonsyoyo/Comfyui/comfy_container_data/output">data/output</option>
-                    <option value="/home/simonsyoyo/Comfyui/comfy_container_data/user">data/user</option>
+                    <option value="/home/simonsyoyo/Comfyui/ComfyUI/models/checkpoints">读取目录中...</option>
                   </select>
                 </div>
                 <div class="field">
@@ -1314,7 +1311,7 @@
             <div class="panel-head">
               <div class="panel-title">
                 <strong>Clash Verge 代理</strong>
-                <span>下载任务使用本机代理状态</span>
+                <span>系统代理开关与 Clash/Mihomo 模式控制</span>
               </div>
               <span class="chip">本机 <strong>127.0.0.1</strong></span>
             </div>
@@ -1328,7 +1325,7 @@
                   <button class="btn" id="detectClashApi" type="button">检测接口</button>
                   <button class="btn" id="startClashVerge" type="button">启动 Clash Verge</button>
                   <button class="btn warn" id="stopClashVerge" type="button">停止 Clash Verge</button>
-                  <button class="btn primary" id="toggleClashProxy" type="button">开启全局代理</button>
+                  <button class="btn primary" id="toggleClashProxy" type="button">开启系统代理</button>
                 </div>
               </div>
               <div style="margin-top: 14px;">
@@ -1399,16 +1396,12 @@
                   <input class="input" id="containerName" value="comfyui">
                 </div>
                 <div class="field">
-                  <label for="imageName">镜像名</label>
-                  <input class="input" id="imageName" value="comfyui:stable">
-                </div>
-                <div class="field">
                   <label for="modelsPath">模型目录</label>
-                  <input class="input" id="modelsPath" value="/home/simonsyoyo/Comfyui/ComfyUI/models">
+                  <input class="input" id="modelsPath" value="/home/simonsyoyo/Comfyui/ComfyUI/models" readonly>
                 </div>
                 <div class="field">
                   <label for="dataRootPath">数据目录</label>
-                  <input class="input" id="dataRootPath" value="/home/simonsyoyo/Comfyui/comfy_container_data">
+                  <input class="input" id="dataRootPath" value="/home/simonsyoyo/Comfyui/comfy_container_data" readonly>
                 </div>
                 <div class="field">
                   <label for="outputPath">输出目录</label>
@@ -1434,6 +1427,10 @@
                   <label for="clashSecret">Clash API 密钥</label>
                   <input class="input" id="clashSecret" value="" placeholder="没有 secret 可留空">
                 </div>
+                <div class="field wide">
+                  <label for="clashVergeConfigPath">Clash Verge 配置文件</label>
+                  <input class="input" id="clashVergeConfigPath" value="~/.config/io.github.clash-verge-rev.clash-verge-rev/verge.yaml">
+                </div>
                 <div class="field">
                   <label for="clashStartCommand">Clash Verge 启动命令</label>
                   <input class="input" id="clashStartCommand" value="clash-verge">
@@ -1454,6 +1451,19 @@ Esc 取消</textarea>
               </div>
             </div>
           </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-title">
+                <strong>自身服务</strong>
+                <span>控制当前 8848 网页服务</span>
+              </div>
+              <div class="proxy-buttons">
+                <button class="btn warn" id="restartService" type="button">重启网页服务</button>
+                <button class="btn danger" id="stopService" type="button">关闭网页服务</button>
+              </div>
+            </div>
+          </div>
         </section>
       </div>
     </main>
@@ -1464,6 +1474,8 @@ Esc 取消</textarea>
   <script>
     const APP_ROOT = "/home/simonsyoyo/Comfyui";
     const DATA_ROOT = "/home/simonsyoyo/Comfyui/comfy_container_data";
+    const MODELS_ROOT = "/home/simonsyoyo/Comfyui/ComfyUI/models";
+    const MAX_BROWSER_SESSION_CHARS = 256 * 1024;
 
     const pageMeta = {
       controller: ["控制器", "控制器 / 容器状态"],
@@ -1481,6 +1493,11 @@ Esc 取消</textarea>
     ];
 
     let currentFiles = [...baseFiles];
+    let managedRoots = [
+      { name: "data", path: DATA_ROOT },
+      { name: "models", path: MODELS_ROOT }
+    ];
+    let downloadDirsLoaded = false;
     let controlButtons = ["Ctrl+C 中断", "Ctrl+D 结束输入", "Ctrl+Z 挂起", "Ctrl+L 清屏", "Tab 补全", "Esc 取消"];
     let downloadSeq = 0;
     let downloadItems = [];
@@ -1546,9 +1563,11 @@ Esc 取消</textarea>
       try {
         await apiFetch("/api/health");
         apiAvailable = true;
+        await loadSettings();
         await Promise.allSettled([
           refreshContainerStatus(),
           loadFiles(getCurrentPath()),
+          loadDownloadDirs(),
           refreshSessions(),
           refreshClashState()
         ]);
@@ -1556,6 +1575,51 @@ Esc 取消</textarea>
       } catch {
         apiAvailable = false;
       }
+    }
+
+    async function loadSettings() {
+      if (!apiAvailable) return;
+      const cfg = await apiFetch("/api/config");
+      document.getElementById("bindHost").value = cfg.bindHost || "127.0.0.1";
+      document.getElementById("bindPort").value = cfg.port || 8848;
+      document.getElementById("containerName").value = cfg.containerName || "comfyui";
+      document.getElementById("modelsPath").value = cfg.modelsPath || MODELS_ROOT;
+      document.getElementById("dataRootPath").value = cfg.dataRoot || DATA_ROOT;
+      document.getElementById("clashControllerUrl").value = cfg.clashControllerUrl || "http://127.0.0.1:9090";
+      document.getElementById("clashSecret").value = cfg.clashSecret || "";
+      document.getElementById("clashVergeConfigPath").value = cfg.clashVergeConfigPath || "~/.config/io.github.clash-verge-rev.clash-verge-rev/verge.yaml";
+      document.getElementById("clashStartCommand").value = cfg.clashStartCommand || "clash-verge";
+      document.getElementById("clashStopCommand").value = cfg.clashStopCommand || "pkill -TERM -f 'clash-verge|Clash Verge'";
+      if (Array.isArray(cfg.controlButtons) && cfg.controlButtons.length) {
+        controlButtons = cfg.controlButtons.slice(0, 12);
+        document.getElementById("controlButtonsInput").value = controlButtons.join("\n");
+      }
+    }
+
+    function collectSettings() {
+      const nextButtons = document.getElementById("controlButtonsInput").value
+        .split(/\r?\n/)
+        .map(item => item.trim())
+        .filter(Boolean)
+        .slice(0, 12);
+      return {
+        bindHost: document.getElementById("bindHost").value.trim() || "127.0.0.1",
+        port: Number(document.getElementById("bindPort").value) || 8848,
+        containerName: document.getElementById("containerName").value.trim() || "comfyui",
+        appRoot: APP_ROOT,
+        dataRoot: DATA_ROOT,
+        containerDataRoot: "/opt/ComfyUI",
+        modelsPath: MODELS_ROOT,
+        downloadDirs: [...document.getElementById("downloadDirPreset").options].map(option => option.value),
+        clashControllerUrl: document.getElementById("clashControllerUrl").value.trim() || "http://127.0.0.1:9090",
+        clashSecret: document.getElementById("clashSecret").value.trim(),
+        clashVergeConfigPath: document.getElementById("clashVergeConfigPath").value.trim() || "~/.config/io.github.clash-verge-rev.clash-verge-rev/verge.yaml",
+        clashStartCommand: document.getElementById("clashStartCommand").value.trim() || "clash-verge",
+        clashStopCommand: document.getElementById("clashStopCommand").value.trim() || "pkill -TERM -f 'clash-verge|Clash Verge'",
+        httpProxy: "http://127.0.0.1:7890",
+        socksProxy: "socks5://127.0.0.1:7891",
+        controlButtons: nextButtons.length ? nextButtons : ["Ctrl+C 中断"]
+      };
     }
 
     async function refreshContainerStatus() {
@@ -1591,6 +1655,89 @@ Esc 取消</textarea>
         .replaceAll('"', "&quot;");
     }
 
+    function appendSessionOutput(session, chunk) {
+      if (!session || !chunk) return;
+      let text = String(chunk);
+      const shouldClear = /\x0c|\x1bc|\x1b\[2J|\x1b\[H/.test(text);
+      if (shouldClear) {
+        session.output = "";
+        text = text.replace(/\x0c|\x1bc|\x1b\[[0-9;?]*[A-Za-z]/g, "");
+      }
+      session.output += text;
+      if (session.output.length > MAX_BROWSER_SESSION_CHARS) {
+        session.output = session.output.slice(-MAX_BROWSER_SESSION_CHARS);
+      }
+    }
+
+    function ansiToHtml(input) {
+      const palette = {
+        30: "#3f4943", 31: "#ff7373", 32: "#6ee59a", 33: "#ffd166",
+        34: "#70a7ff", 35: "#d58cff", 36: "#5de2e7", 37: "#e8efe9",
+        90: "#7d8a83", 91: "#ff9a9a", 92: "#94f2b5", 93: "#ffe08a",
+        94: "#9bc2ff", 95: "#e0afff", 96: "#8ef0f2", 97: "#ffffff"
+      };
+      const bgPalette = {
+        40: "#20211f", 41: "#7f2b2b", 42: "#245c38", 43: "#705000",
+        44: "#244a7f", 45: "#593070", 46: "#1f6468", 47: "#d9eadf",
+        100: "#4a534d", 101: "#a63d3d", 102: "#347a4d", 103: "#94721b",
+        104: "#3868a7", 105: "#774493", 106: "#2a858a", 107: "#ffffff"
+      };
+      const state = { bold: false, dim: false, italic: false, underline: false, fg: "", bg: "" };
+      const css = () => {
+        const rules = [];
+        if (state.bold) rules.push("font-weight:700");
+        if (state.dim) rules.push("opacity:.72");
+        if (state.italic) rules.push("font-style:italic");
+        if (state.underline) rules.push("text-decoration:underline");
+        if (state.fg) rules.push(`color:${state.fg}`);
+        if (state.bg) rules.push(`background:${state.bg}`);
+        return rules.join(";");
+      };
+      const applyCodes = codes => {
+        if (!codes.length) codes = [0];
+        for (let i = 0; i < codes.length; i += 1) {
+          const code = Number(codes[i] || 0);
+          if (code === 0) Object.assign(state, { bold: false, dim: false, italic: false, underline: false, fg: "", bg: "" });
+          else if (code === 1) state.bold = true;
+          else if (code === 2) state.dim = true;
+          else if (code === 3) state.italic = true;
+          else if (code === 4) state.underline = true;
+          else if (code === 22) { state.bold = false; state.dim = false; }
+          else if (code === 23) state.italic = false;
+          else if (code === 24) state.underline = false;
+          else if (code === 39) state.fg = "";
+          else if (code === 49) state.bg = "";
+          else if (palette[code]) state.fg = palette[code];
+          else if (bgPalette[code]) state.bg = bgPalette[code];
+          else if (code === 38 && codes[i + 1] === "2" && codes.length >= i + 4) {
+            state.fg = `rgb(${Number(codes[i + 2]) || 0},${Number(codes[i + 3]) || 0},${Number(codes[i + 4]) || 0})`;
+            i += 4;
+          } else if (code === 48 && codes[i + 1] === "2" && codes.length >= i + 4) {
+            state.bg = `rgb(${Number(codes[i + 2]) || 0},${Number(codes[i + 3]) || 0},${Number(codes[i + 4]) || 0})`;
+            i += 4;
+          }
+        }
+      };
+      let output = "";
+      let open = false;
+      let last = 0;
+      const text = String(input).replace(/\r(?!\n)/g, "\n").replace(/\x0c|\x1bc/g, "");
+      const ansi = /\x1b\[([0-9;?]*)([A-Za-z])/g;
+      for (let match; (match = ansi.exec(text)); ) {
+        output += escapeHtml(text.slice(last, match.index));
+        last = ansi.lastIndex;
+        if (match[2] !== "m") continue;
+        if (open) output += "</span>";
+        applyCodes(match[1].split(";").filter(item => !item.startsWith("?")));
+        const nextCss = css();
+        open = !!nextCss;
+        if (open) output += `<span style="${nextCss}">`;
+      }
+      output += escapeHtml(text.slice(last));
+      if (open) output += "</span>";
+      return output;
+    }
+
     function getCurrentPath() {
       return document.getElementById("pathInput").value.trim() || "/";
     }
@@ -1598,6 +1745,17 @@ Esc 取消</textarea>
     function joinPath(base, name) {
       const cleanBase = base.replace(/\/+$/, "");
       return `${cleanBase || ""}/${name}`.replace(/\/+/g, "/");
+    }
+
+    function cleanPath(path) {
+      return String(path || "/").replace(/\/+$/, "") || "/";
+    }
+
+    function managedParent(path) {
+      const clean = cleanPath(path);
+      const root = managedRoots.find(item => clean === cleanPath(item.path) || clean.startsWith(`${cleanPath(item.path)}/`));
+      if (!root || clean === cleanPath(root.path)) return clean;
+      return clean.slice(0, clean.lastIndexOf("/")) || cleanPath(root.path);
     }
 
     function dockerShellQuote(path) {
@@ -1625,7 +1783,7 @@ Esc 取消</textarea>
     function appendToSession(id, lines) {
       const session = sessions.find(item => item.id === id);
       if (!session) return;
-      session.output += `\n${lines}`;
+      appendSessionOutput(session, `\n${lines}`);
       if (activeTerminalId === id) renderTerminal();
     }
 
@@ -1683,6 +1841,17 @@ Esc 取消</textarea>
       return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
     }
 
+    function updateStorage(data) {
+      if (Array.isArray(data.roots)) managedRoots = data.roots;
+      const free = Number(data.freeBytes || 0);
+      const total = Number(data.totalBytes || 0);
+      const used = total > 0 ? Math.max(0, Math.min(100, ((total - free) / total) * 100)) : 0;
+      document.getElementById("storageFree").textContent = formatBytes(free);
+      document.getElementById("storageTotal").textContent = formatBytes(total);
+      document.getElementById("storageBar").style.width = `${used.toFixed(1)}%`;
+      document.getElementById("storageScope").textContent = data.path ? `当前目录：${data.path}` : "当前目录可用空间";
+    }
+
     async function loadFiles(path) {
       if (!apiAvailable) {
         currentFiles = [...baseFiles];
@@ -1691,6 +1860,7 @@ Esc 取消</textarea>
       }
       const data = await apiFetch(`/api/files/list?path=${encodeURIComponent(path)}`);
       document.getElementById("pathInput").value = data.path;
+      updateStorage(data);
       currentFiles = data.entries.map(item => ({
         ...item,
         sizeText: item.type === "DIR" ? "-" : formatBytes(item.size),
@@ -1755,7 +1925,7 @@ Esc 取消</textarea>
       appendToSession("logs", `[${stamp()}] Docker 删除\n[docker] ${command}\n[ok] 已从列表移除：${targetPath}`);
       renderFiles();
       switchPage("terminal");
-      showToast("删除动作已写入命令行，真实后端会在 Docker 内执行。");
+      showToast("删除动作已记录。");
     }
 
     function terminalLimitText() {
@@ -1793,7 +1963,7 @@ Esc 取消</textarea>
       source.onmessage = event => {
         const session = sessions.find(item => item.id === id);
         if (!session) return;
-        session.output += `${session.output ? "\n" : ""}${event.data}`;
+        appendSessionOutput(session, event.data);
         if (activeTerminalId === id) renderTerminal();
       };
       source.onerror = () => {
@@ -1816,15 +1986,19 @@ Esc 取消</textarea>
           if (apiAvailable) {
             try {
               await apiFetch("/api/terminal/control", { method: "POST", body: JSON.stringify({ id: active.id, control }) });
+              if (control.toUpperCase().startsWith("CTRL+L")) {
+                active.output = "";
+                renderTerminal();
+              }
             } catch (error) {
               showToast(error.message);
             }
             return;
           }
           if (control.startsWith("Ctrl+L")) {
-            active.output = `[control] ${control}`;
+            active.output = "";
           } else {
-            active.output += `\n[control] ${control}`;
+            appendSessionOutput(active, `\n[control] ${control}`);
           }
           renderTerminal();
         });
@@ -1871,7 +2045,7 @@ Esc 取消</textarea>
       document.getElementById("activeTermState").textContent = active.state;
       document.getElementById("promptPath").textContent = `${active.cwd} $`;
       const output = document.getElementById("terminalOutput");
-      output.textContent = active.output;
+      output.innerHTML = ansiToHtml(active.output);
       output.scrollTop = output.scrollHeight;
     }
 
@@ -1959,14 +2133,13 @@ Esc 取消</textarea>
         kind: "user",
         output: [
           "$ docker exec -it comfyui bash",
-          "root@comfyui:/opt/ComfyUI#",
-          "[web-shell] 真实后端会把这里连接到容器内 bash。"
+          "root@comfyui:/opt/ComfyUI#"
         ].join("\n")
       });
       activeTerminalId = id;
       switchPage("terminal");
       renderTerminal();
-      showToast("已进入 Docker bash 会话示例。");
+      showToast("已进入 Docker bash 会话。");
     }
 
     async function sendTerminalCommand() {
@@ -1983,7 +2156,7 @@ Esc 取消</textarea>
         }
         return;
       }
-      active.output += `\n$ ${command}\n[web-shell] 这里将接入真实 PTY 输出。`;
+      appendSessionOutput(active, `\n$ ${command}`);
       input.value = "";
       renderTerminal();
     }
@@ -2013,6 +2186,24 @@ Esc 取消</textarea>
         startButton.textContent = "开始下载";
       }
       document.getElementById("downloadPreview").textContent = data.command;
+    }
+
+    async function loadDownloadDirs() {
+      if (!apiAvailable) return;
+      const select = document.getElementById("downloadDirPreset");
+      const current = document.getElementById("downloadDirInput").value.trim();
+      const data = await apiFetch("/api/download/dirs");
+      const dirs = Array.isArray(data.dirs) ? data.dirs : [];
+      if (!dirs.length) {
+        select.innerHTML = `<option value="${DATA_ROOT}">data</option><option value="${MODELS_ROOT}">models</option>`;
+        return;
+      }
+      select.innerHTML = dirs.map(item => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.label)}</option>`).join("");
+      const matched = dirs.find(item => item.path === current) || dirs.find(item => item.path === `${MODELS_ROOT}/checkpoints`) || dirs[0];
+      select.value = matched.path;
+      document.getElementById("downloadDirInput").value = matched.path;
+      downloadDirsLoaded = true;
+      renderDownloadPreview();
     }
 
     function ensureDownloadSession() {
@@ -2082,7 +2273,7 @@ Esc 取消</textarea>
       const session = ensureDownloadSession();
       if (session) {
         session.cwd = data.dir;
-        session.output += `\n[${stamp()}] 下载任务 #${item.id}\n$ ${data.command}\n[web-shell] 真实后端会在这里输出 ${data.method} 结果。`;
+        appendSessionOutput(session, `\n[${stamp()}] 下载任务 #${item.id}\n$ ${data.command}`);
       } else {
         showToast("任务已加入下载队列；命令行已满，暂未创建下载输出会话。");
         return;
@@ -2111,6 +2302,7 @@ Esc 取消</textarea>
       return {
         controllerUrl: document.getElementById("clashControllerUrl").value.trim().replace(/\/+$/, "") || "http://127.0.0.1:9090",
         secret: document.getElementById("clashSecret").value.trim(),
+        vergeConfigPath: document.getElementById("clashVergeConfigPath").value.trim(),
         startCommand: document.getElementById("clashStartCommand").value.trim() || "clash-verge",
         stopCommand: document.getElementById("clashStopCommand").value.trim() || "pkill -TERM -f 'clash-verge|Clash Verge'"
       };
@@ -2134,14 +2326,14 @@ Esc 取消</textarea>
 
     function appendDownloaderOutput(lines) {
       const session = ensureDownloadSession();
-      session.output += `\n${lines}`;
+      appendSessionOutput(session, `\n${lines}`);
       if (activeTerminalId === session.id) renderTerminal();
     }
 
     function renderClashControls() {
-      document.getElementById("clashProxyStatus").textContent = clashProxyEnabled ? "全局代理已开启" : "全局代理已关闭";
+      document.getElementById("clashProxyStatus").textContent = clashProxyEnabled ? "系统代理已开启" : "系统代理已关闭";
       document.getElementById("clashModeStatus").textContent = `Clash Verge：${clashRuntimeLabel(clashAppRunning)}；接口：${clashApiLabel(clashApiDetected)}；当前模式：${clashModeLabel(clashMode)}`;
-      document.getElementById("toggleClashProxy").textContent = clashProxyEnabled ? "关闭全局代理" : "开启全局代理";
+      document.getElementById("toggleClashProxy").textContent = clashProxyEnabled ? "关闭系统代理" : "开启系统代理";
       document.querySelectorAll("[data-clash-mode]").forEach(btn => {
         btn.classList.toggle("active", btn.dataset.clashMode === clashMode);
       });
@@ -2150,7 +2342,7 @@ Esc 取消</textarea>
     async function refreshClashState() {
       if (!apiAvailable) return;
       const data = await apiFetch("/api/clash/state");
-      clashProxyEnabled = !!data.downloadProxy;
+      clashProxyEnabled = data.systemProxyChecked ? !!data.systemProxy : !!data.downloadProxy;
       clashMode = data.mode || clashMode;
       clashApiDetected = data.apiChecked ? !!data.apiDetected : null;
       clashAppRunning = data.appChecked ? !!data.appRunning : null;
@@ -2173,7 +2365,7 @@ Esc 取消</textarea>
         return;
       }
       clashAppRunning = true;
-      appendDownloaderOutput(`[${stamp()}] 启动 Clash Verge\n[cmd] ${config.startCommand}\n[web-shell] 真实后端会以后台进程启动，并记录 PID 与日志。`);
+      appendDownloaderOutput(`[${stamp()}] 启动 Clash Verge\n[cmd] ${config.startCommand}`);
       renderClashControls();
       showToast("已写入启动 Clash Verge 动作。");
     }
@@ -2195,7 +2387,7 @@ Esc 取消</textarea>
       }
       clashAppRunning = false;
       clashApiDetected = false;
-      appendDownloaderOutput(`[${stamp()}] 停止 Clash Verge\n[cmd] ${config.stopCommand}\n[web-shell] 真实后端只发送正常终止请求，失败会反馈错误，不强杀。`);
+      appendDownloaderOutput(`[${stamp()}] 停止 Clash Verge\n[cmd] ${config.stopCommand}`);
       renderClashControls();
       showToast("已写入停止 Clash Verge 动作。");
     }
@@ -2224,7 +2416,7 @@ Esc 取消</textarea>
         appendDownloaderOutput(`[result] ${response.ok ? "接口可用" : `接口返回 HTTP ${response.status}`}`);
       } catch (error) {
         clashApiDetected = false;
-        appendDownloaderOutput(`[result] 浏览器侧检测失败：${error.message}\n[note] 真实后端会从本机直接请求 external-controller，可避开浏览器 CORS 限制。`);
+        appendDownloaderOutput(`[result] 浏览器侧检测失败：${error.message}`);
       }
       renderClashControls();
       showToast(clashApiDetected ? "Clash 控制接口可用。" : "暂未检测到 Clash 控制接口。");
@@ -2235,7 +2427,7 @@ Esc 取消</textarea>
       if (apiAvailable) {
         try {
           const data = await apiFetch("/api/clash/proxy", { method: "POST", body: JSON.stringify({ enabled: clashProxyEnabled }) });
-          clashProxyEnabled = !!data.enabled;
+          clashProxyEnabled = !!data.systemProxy || !!data.enabled;
           await refreshSessions();
         } catch (error) {
           clashProxyEnabled = !clashProxyEnabled;
@@ -2243,13 +2435,14 @@ Esc 取消</textarea>
           return;
         }
       }
-      appendDownloaderOutput(`[${stamp()}] 下载代理\n[proxy] ${clashProxyEnabled ? "enable" : "disable"}\n[env] ${clashProxyEnabled ? "HTTP_PROXY/HTTPS_PROXY/ALL_PROXY will be applied to downloads" : "download proxy env disabled"}`);
+      appendDownloaderOutput(`[${stamp()}] Clash Verge 系统代理\n[proxy] ${clashProxyEnabled ? "enable" : "disable"}\n[env] ${clashProxyEnabled ? "下载任务同步使用 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY" : "下载代理环境变量已关闭"}`);
       renderClashControls();
       renderDownloadPreview();
-      showToast(clashProxyEnabled ? "全局代理已开启。" : "全局代理已关闭。");
+      showToast(clashProxyEnabled ? "系统代理已开启。" : "系统代理已关闭。");
     }
 
     async function setClashMode(mode) {
+      const previousMode = clashMode;
       clashMode = mode;
       if (apiAvailable) {
         try {
@@ -2257,6 +2450,7 @@ Esc 取消</textarea>
           clashMode = data.mode || mode;
           await refreshSessions();
         } catch (error) {
+          clashMode = previousMode;
           showToast(error.message);
           renderClashControls();
           return;
@@ -2299,7 +2493,7 @@ Esc 取消</textarea>
       updateStatus("running");
       ensureLogsSession();
       appendToSession("logs", `[${stamp()}] 启动 / 唤醒容器\n[docker] docker start comfyui\n[ok] 已唤醒已有容器`);
-      showToast("已写入启动动作示例。");
+      showToast("已写入启动动作。");
     });
 
     document.getElementById("stopContainer").addEventListener("click", async () => {
@@ -2316,7 +2510,7 @@ Esc 取消</textarea>
       }
       updateStatus("stopped");
       appendToSession("logs", `[${stamp()}] 停止容器\n[docker] docker stop comfyui\n[ok] 容器已停止`);
-      showToast("已写入停止动作示例。");
+      showToast("已写入停止动作。");
     });
 
     document.getElementById("restartContainer").addEventListener("click", async () => {
@@ -2334,7 +2528,7 @@ Esc 取消</textarea>
       updateStatus("running");
       ensureLogsSession();
       appendToSession("logs", `[${stamp()}] 重启容器\n[docker] docker restart comfyui\n[ok] 容器已重启`);
-      showToast("已写入重启动作示例。");
+      showToast("已写入重启动作。");
     });
 
     document.getElementById("showLogs").addEventListener("click", async () => {
@@ -2372,8 +2566,12 @@ Esc 取消</textarea>
 
     document.getElementById("parentPath").addEventListener("click", async () => {
       const input = document.getElementById("pathInput");
-      const clean = input.value.replace(/\/+$/, "");
-      input.value = clean.includes("/") ? clean.slice(0, clean.lastIndexOf("/")) || "/" : "/";
+      const next = managedParent(input.value);
+      if (next === cleanPath(input.value)) {
+        showToast("已经到达允许访问的根目录。");
+        return;
+      }
+      input.value = next;
       if (apiAvailable) {
         try {
           await loadFiles(input.value);
@@ -2402,6 +2600,24 @@ Esc 取消</textarea>
       document.getElementById("downloadDirInput").value = event.target.value;
       renderDownloadPreview();
     });
+    document.getElementById("downloadDirPreset").addEventListener("focus", async () => {
+      if (!downloadDirsLoaded && apiAvailable) {
+        try {
+          await loadDownloadDirs();
+        } catch (error) {
+          showToast(error.message);
+        }
+      }
+    });
+    document.getElementById("downloadDirPreset").addEventListener("pointerdown", async () => {
+      if (apiAvailable) {
+        try {
+          await loadDownloadDirs();
+        } catch (error) {
+          showToast(error.message);
+        }
+      }
+    });
 
     document.getElementById("downloadDirInput").addEventListener("input", renderDownloadPreview);
     document.getElementById("downloadMethod").addEventListener("change", renderDownloadPreview);
@@ -2415,17 +2631,45 @@ Esc 取消</textarea>
       btn.addEventListener("click", () => setClashMode(btn.dataset.clashMode));
     });
 
-    document.getElementById("saveSettings").addEventListener("click", () => {
-      const nextButtons = document.getElementById("controlButtonsInput").value
-        .split(/\r?\n/)
-        .map(item => item.trim())
-        .filter(Boolean)
-        .slice(0, 12);
-      controlButtons = nextButtons.length ? nextButtons : ["Ctrl+C 中断"];
+    document.getElementById("restartService").addEventListener("click", async () => {
+      if (!window.confirm("确认重启当前网页服务？")) return;
+      try {
+        await apiFetch("/api/service/restart", { method: "POST", body: "{}" });
+        showToast("网页服务正在重启，稍后自动刷新。");
+        setTimeout(() => location.reload(), 1800);
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+
+    document.getElementById("stopService").addEventListener("click", async () => {
+      if (!window.confirm("确认关闭当前网页服务？关闭后需要手动重新启动。")) return;
+      try {
+        await apiFetch("/api/service/stop", { method: "POST", body: "{}" });
+        showToast("网页服务正在关闭。");
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+
+    document.getElementById("saveSettings").addEventListener("click", async () => {
+      const settings = collectSettings();
+      controlButtons = settings.controlButtons;
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/config", { method: "POST", body: JSON.stringify(settings) });
+          await loadSettings();
+          showToast("设置已保存。");
+        } catch (error) {
+          showToast(error.message);
+          return;
+        }
+      } else {
+        showToast("命令行控制按钮已刷新。");
+      }
       renderControlButtons();
       renderClashControls();
       renderDownloadPreview();
-      showToast("设置已暂存到页面状态，命令行控制按钮已刷新。");
     });
 
     renderFiles();

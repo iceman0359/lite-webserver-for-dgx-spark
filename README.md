@@ -55,12 +55,15 @@ The server binds to `127.0.0.1` by default, so it is only reachable from the loc
 - Uses only Go standard library.
 - Static UI is embedded into the binary.
 - Terminal/log output uses bounded ring buffers, so output does not grow forever in memory.
+- User terminals run through a lightweight Linux PTY, so interactive bash, ANSI colors, completion, and control keys behave closer to an Ubuntu terminal.
 - Download tasks run through one serial worker to avoid multiple large downloads competing for memory and disk IO.
 - File listing skips hidden files and caps large directory responses.
+- File manager and downloader paths are restricted to the two managed roots only:
+  `/home/simonsyoyo/Comfyui/comfy_container_data` and `/home/simonsyoyo/Comfyui/ComfyUI/models`.
 - Docker container actions only call `docker start`, `docker stop`, `docker restart`, and `docker logs`.
 - File deletion maps host data paths into the Docker container and runs `docker exec comfyui rm -rf -- <container-path>`.
 - Clash/Mihomo mode switching uses the `external-controller` API.
-- Clash Verge start/stop uses configurable local commands.
+- Clash Verge start/stop uses configurable local commands. The system proxy switch uses Ubuntu `gsettings` when available and also tries to update Clash Verge Rev `verge.yaml`.
 
 ## Important Defaults
 
@@ -106,6 +109,8 @@ POST /api/container/logs/start
 GET  /api/files/list?path=/some/path
 POST /api/files/delete
 
+GET  /api/download/dirs
+
 GET  /api/terminal/sessions
 POST /api/terminal/create
 POST /api/terminal/docker-bash
@@ -122,8 +127,11 @@ POST /api/clash/mode
 POST /api/clash/proxy
 POST /api/clash/start
 POST /api/clash/stop
+
+POST /api/service/restart
+POST /api/service/stop
 ```
 
 ## Notes
 
-The terminal implementation is line-oriented with pipes, not a full PTY. It is light and works for ordinary shell commands, downloads, logs, and Docker bash basics. If later you need full-screen terminal programs such as `vim`, `top`, or curses UIs, the next step is adding a PTY backend.
+The terminal implementation uses a small Linux PTY path without Node/Python. It is intended for ordinary shell work, downloads, logs, and Docker bash basics.

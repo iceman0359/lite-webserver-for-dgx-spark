@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -23,6 +24,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 //go:embed static/index.html
@@ -34,9 +36,19 @@ const (
 	maxSessionEvents = 256
 	maxSessionSubscribers = 16
 	maxFileEntries = 4000
+	maxDownloadDirEntries = 2000
 	requestBodyLimit = 1 << 20
 	maxTerminalInputBytes = 4096
 	maxDownloadQueue = 64
+
+	defaultAppRoot = "/home/simonsyoyo/Comfyui"
+	defaultDataRoot = "/home/simonsyoyo/Comfyui/comfy_container_data"
+	defaultModelsRoot = "/home/simonsyoyo/Comfyui/ComfyUI/models"
+	defaultContainerRoot = "/opt/ComfyUI"
+	defaultClashVergeConfig = "~/.config/io.github.clash-verge-rev.clash-verge-rev/verge.yaml"
+
+	tiocgptn = 0x80045430
+	tiocsptlck = 0x40045431
 )
 
 type Config struct {
@@ -51,10 +63,12 @@ type Config struct {
 
 	ClashControllerURL string `json:"clashControllerUrl"`
 	ClashSecret        string `json:"clashSecret"`
+	ClashVergeConfigPath string `json:"clashVergeConfigPath"`
 	ClashStartCommand  string `json:"clashStartCommand"`
 	ClashStopCommand   string `json:"clashStopCommand"`
 	HTTPProxy          string `json:"httpProxy"`
 	SocksProxy         string `json:"socksProxy"`
+	ControlButtons     []string `json:"controlButtons"`
 }
 
 func defaultConfig() Config {
@@ -62,30 +76,34 @@ func defaultConfig() Config {
 		BindHost:           "127.0.0.1",
 		Port:               8848,
 		ContainerName:      "comfyui",
-		AppRoot:            "/home/simonsyoyo/Comfyui",
-		DataRoot:           "/home/simonsyoyo/Comfyui/comfy_container_data",
-		ContainerDataRoot:  "/opt/ComfyUI",
-		ModelsPath:         "/home/simonsyoyo/Comfyui/ComfyUI/models",
+		AppRoot:            defaultAppRoot,
+		DataRoot:           defaultDataRoot,
+		ContainerDataRoot:  defaultContainerRoot,
+		ModelsPath:         defaultModelsRoot,
 		DownloadDirs:       []string{
-			"/home/simonsyoyo/Comfyui/ComfyUI/models/checkpoints",
-			"/home/simonsyoyo/Comfyui/ComfyUI/models/loras",
-			"/home/simonsyoyo/Comfyui/ComfyUI/models/vae",
-			"/home/simonsyoyo/Comfyui/comfy_container_data/custom_nodes",
-			"/home/simonsyoyo/Comfyui/comfy_container_data/input",
-			"/home/simonsyoyo/Comfyui/comfy_container_data/output",
-			"/home/simonsyoyo/Comfyui/comfy_container_data/user",
+			defaultModelsRoot + "/checkpoints",
+			defaultModelsRoot + "/loras",
+			defaultModelsRoot + "/vae",
+			defaultDataRoot + "/custom_nodes",
+			defaultDataRoot + "/input",
+			defaultDataRoot + "/output",
+			defaultDataRoot + "/user",
 		},
 		ClashControllerURL: "http://127.0.0.1:9090",
+		ClashVergeConfigPath: defaultClashVergeConfig,
 		ClashStartCommand:  "clash-verge",
 		ClashStopCommand:   "pkill -TERM -f 'clash-verge|Clash Verge'",
 		HTTPProxy:          "http://127.0.0.1:7890",
 		SocksProxy:         "socks5://127.0.0.1:7891",
+		ControlButtons:     []string{"Ctrl+C 中断", "Ctrl+D 结束输入", "Ctrl+Z 挂起", "Ctrl+L 清屏", "Tab 补全", "Esc 取消"},
 	}
 }
 
 type Server struct {
 	cfgMu sync.RWMutex
 	cfg Config
+	httpServer *http.Server
+	serviceOnce sync.Once
 
 	sessions *SessionHub
 	downloads chan DownloadTask
@@ -119,6 +137,7 @@ type Session struct {
 
 	cmd *exec.Cmd
 	stdin io.WriteCloser
+	pty *os.File
 	done chan error
 
 	seq uint64
@@ -149,12 +168,24 @@ type FileEntry struct {
 	ModTime time.Time `json:"modTime"`
 }
 
+type ManagedRoot struct {
+	Name string
+	Host string
+	Container string
+}
+
+type DownloadDirEntry struct {
+	Path string `json:"path"`
+	Label string `json:"label"`
+}
+
 func main() {
 	cfg := defaultConfig()
 	if err := loadConfig("config.json", &cfg); err != nil {
 		log.Printf("using default config: %v", err)
 	}
 
+	normalizeConfig(&cfg)
 	cfg.BindHost = loopbackBindHost(cfg.BindHost)
 
 	s := &Server{
@@ -175,6 +206,7 @@ func main() {
 		Handler: localOnly(withSecurityHeaders(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	s.httpServer = server
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -201,11 +233,71 @@ func loadConfig(path string, cfg *Config) error {
 }
 
 func saveConfig(path string, cfg Config) error {
+	normalizeConfig(&cfg)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0600)
+}
+
+func normalizeConfig(cfg *Config) {
+	cfg.AppRoot = defaultAppRoot
+	cfg.DataRoot = defaultDataRoot
+	cfg.ModelsPath = defaultModelsRoot
+	if strings.TrimSpace(cfg.BindHost) == "" {
+		cfg.BindHost = "127.0.0.1"
+	}
+	if cfg.Port == 0 {
+		cfg.Port = 8848
+	}
+	if strings.TrimSpace(cfg.ContainerName) == "" {
+		cfg.ContainerName = "comfyui"
+	}
+	if strings.TrimSpace(cfg.ContainerDataRoot) == "" {
+		cfg.ContainerDataRoot = defaultContainerRoot
+	}
+	if strings.TrimSpace(cfg.ClashControllerURL) == "" {
+		cfg.ClashControllerURL = "http://127.0.0.1:9090"
+	}
+	if strings.TrimSpace(cfg.ClashVergeConfigPath) == "" {
+		cfg.ClashVergeConfigPath = defaultClashVergeConfig
+	}
+	if strings.TrimSpace(cfg.ClashStartCommand) == "" {
+		cfg.ClashStartCommand = "clash-verge"
+	}
+	if strings.TrimSpace(cfg.ClashStopCommand) == "" {
+		cfg.ClashStopCommand = "pkill -TERM -f 'clash-verge|Clash Verge'"
+	}
+	if strings.TrimSpace(cfg.HTTPProxy) == "" {
+		cfg.HTTPProxy = "http://127.0.0.1:7890"
+	}
+	if strings.TrimSpace(cfg.SocksProxy) == "" {
+		cfg.SocksProxy = "socks5://127.0.0.1:7891"
+	}
+	cfg.ControlButtons = cleanControlButtons(cfg.ControlButtons)
+	cfg.DownloadDirs = filterManagedDownloadDirs(cfg.DownloadDirs)
+	if len(cfg.DownloadDirs) == 0 {
+		cfg.DownloadDirs = defaultConfig().DownloadDirs
+	}
+}
+
+func cleanControlButtons(buttons []string) []string {
+	out := make([]string, 0, min(len(buttons), 12))
+	for _, item := range buttons {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		out = append(out, item)
+		if len(out) >= 12 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return []string{"Ctrl+C 中断", "Ctrl+D 结束输入", "Ctrl+Z 挂起", "Ctrl+L 清屏", "Tab 补全", "Esc 取消"}
+	}
+	return out
 }
 
 func NewSessionHub() *SessionHub {
@@ -306,6 +398,23 @@ func (s *Session) Append(data string) {
 	s.mu.Unlock()
 }
 
+func (s *Session) Clear() {
+	ev := Event{Data: "\x1b[2J\x1b[H", At: time.Now()}
+
+	s.mu.Lock()
+	s.seq++
+	ev.Seq = s.seq
+	s.events = []Event{ev}
+	s.byteCount = len(ev.Data)
+	for ch := range s.subs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+	s.mu.Unlock()
+}
+
 func (s *Session) Snapshot(after uint64) []Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -380,6 +489,7 @@ func (srv *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/files/list", srv.method("GET", srv.handleFilesList))
 	mux.HandleFunc("/api/files/delete", srv.method("POST", srv.handleFilesDelete))
 
+	mux.HandleFunc("/api/download/dirs", srv.method("GET", srv.handleDownloadDirs))
 	mux.HandleFunc("/api/terminal/sessions", srv.method("GET", srv.handleTerminalSessions))
 	mux.HandleFunc("/api/terminal/create", srv.method("POST", srv.handleTerminalCreate))
 	mux.HandleFunc("/api/terminal/docker-bash", srv.method("POST", srv.handleTerminalDockerBash))
@@ -395,6 +505,9 @@ func (srv *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/clash/proxy", srv.method("POST", srv.handleClashProxy))
 	mux.HandleFunc("/api/clash/start", srv.method("POST", srv.handleClashStart))
 	mux.HandleFunc("/api/clash/stop", srv.method("POST", srv.handleClashStop))
+
+	mux.HandleFunc("/api/service/stop", srv.method("POST", srv.handleServiceStop))
+	mux.HandleFunc("/api/service/restart", srv.method("POST", srv.handleServiceRestart))
 }
 
 func (srv *Server) method(method string, next http.HandlerFunc) http.HandlerFunc {
@@ -488,6 +601,7 @@ func (srv *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		normalizeConfig(&cfg)
 		cfg.BindHost = loopbackBindHost(cfg.BindHost)
 		if cfg.Port == 0 {
 			cfg.Port = 8848
@@ -602,9 +716,10 @@ func (srv *Server) appendLogs(data string) {
 }
 
 func (srv *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Query().Get("path")
-	if path == "" {
-		path = srv.currentConfig().DataRoot
+	path, _, _, err := srv.resolveManagedPath(r.URL.Query().Get("path"), true, true)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
 	}
 	entries, err := listDirectory(path)
 	if err != nil {
@@ -617,6 +732,7 @@ func (srv *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 		"entries": entries,
 		"freeBytes": free,
 		"totalBytes": total,
+		"roots": srv.managedRootViews(),
 	})
 }
 
@@ -644,26 +760,21 @@ func (srv *Server) handleFilesDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) hostToContainerPath(path string) (string, error) {
-	cfg := srv.currentConfig()
-	clean, err := filepath.Abs(path)
+	clean, root, rel, err := srv.resolveManagedPath(path, true, false)
 	if err != nil {
 		return "", err
 	}
-	root, err := filepath.Abs(cfg.DataRoot)
+	if rel == "." {
+		return "", errors.New("managed root directories cannot be deleted")
+	}
+	info, err := os.Lstat(clean)
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(root, clean)
-	if err != nil {
-		return "", err
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("symbolic links are not managed")
 	}
-	if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("path must be inside data root: %s", cfg.DataRoot)
-	}
-	if strings.HasPrefix(filepath.Base(clean), ".") {
-		return "", errors.New("hidden files are not managed")
-	}
-	return pathJoinSlash(cfg.ContainerDataRoot, filepath.ToSlash(rel)), nil
+	return pathJoinSlash(root.Container, filepath.ToSlash(rel)), nil
 }
 
 func listDirectory(path string) ([]FileEntry, error) {
@@ -701,6 +812,194 @@ func listDirectory(path string) ([]FileEntry, error) {
 			return entries[i].Type == "DIR"
 		}
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
+	return entries, nil
+}
+
+func filterManagedDownloadDirs(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, raw := range paths {
+		clean, err := filepath.Abs(strings.TrimSpace(raw))
+		if err != nil || clean == "" {
+			continue
+		}
+		if !pathInside(defaultDataRoot, clean) && !pathInside(defaultModelsRoot, clean) {
+			continue
+		}
+		if hasHiddenRel(pathRelForFilter(defaultDataRoot, defaultModelsRoot, clean)) {
+			continue
+		}
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		seen[clean] = struct{}{}
+		out = append(out, clean)
+	}
+	return out
+}
+
+func pathRelForFilter(rootA, rootB, clean string) string {
+	if pathInside(rootA, clean) {
+		rel, _ := filepath.Rel(rootA, clean)
+		return rel
+	}
+	rel, _ := filepath.Rel(rootB, clean)
+	return rel
+}
+
+func (srv *Server) managedRoots() []ManagedRoot {
+	cfg := srv.currentConfig()
+	return []ManagedRoot{
+		{Name: "data", Host: defaultDataRoot, Container: strings.TrimRight(cfg.ContainerDataRoot, "/")},
+		{Name: "models", Host: defaultModelsRoot, Container: pathJoinSlash(cfg.ContainerDataRoot, "models")},
+	}
+}
+
+func (srv *Server) managedRootViews() []map[string]string {
+	roots := srv.managedRoots()
+	out := make([]map[string]string, 0, len(roots))
+	for _, root := range roots {
+		out = append(out, map[string]string{"name": root.Name, "path": root.Host})
+	}
+	return out
+}
+
+func (srv *Server) resolveManagedPath(raw string, mustExist, dirRequired bool) (string, ManagedRoot, string, error) {
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		path = defaultDataRoot
+	}
+	clean, err := filepath.Abs(path)
+	if err != nil {
+		return "", ManagedRoot{}, "", err
+	}
+	for _, root := range srv.managedRoots() {
+		rootClean, err := filepath.Abs(root.Host)
+		if err != nil {
+			continue
+		}
+		if !pathInside(rootClean, clean) {
+			continue
+		}
+		rel, err := filepath.Rel(rootClean, clean)
+		if err != nil {
+			return "", ManagedRoot{}, "", err
+		}
+		if hasHiddenRel(rel) {
+			return "", ManagedRoot{}, "", errors.New("hidden paths are not managed")
+		}
+		if mustExist {
+			if err := ensureNoSymlinkEscape(rootClean, clean); err != nil {
+				return "", ManagedRoot{}, "", err
+			}
+			info, err := os.Stat(clean)
+			if err != nil {
+				return "", ManagedRoot{}, "", err
+			}
+			if dirRequired && !info.IsDir() {
+				return "", ManagedRoot{}, "", fmt.Errorf("not a directory: %s", clean)
+			}
+		}
+		return clean, root, rel, nil
+	}
+	return "", ManagedRoot{}, "", fmt.Errorf("only paths under %s or %s can be managed", defaultDataRoot, defaultModelsRoot)
+}
+
+func pathInside(root, target string) bool {
+	rootClean, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	targetClean, err := filepath.Abs(target)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(rootClean, targetClean)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
+}
+
+func hasHiddenRel(rel string) bool {
+	if rel == "." || rel == "" {
+		return false
+	}
+	for _, part := range strings.Split(filepath.Clean(rel), string(filepath.Separator)) {
+		if strings.HasPrefix(part, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureNoSymlinkEscape(root, target string) error {
+	rootEval, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	targetEval, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return err
+	}
+	if !pathInside(rootEval, targetEval) {
+		return fmt.Errorf("path escapes managed root through a symbolic link: %s", target)
+	}
+	return nil
+}
+
+func (srv *Server) handleDownloadDirs(w http.ResponseWriter, r *http.Request) {
+	dirs, err := srv.listManagedDownloadDirs()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"dirs": dirs})
+}
+
+func (srv *Server) listManagedDownloadDirs() ([]DownloadDirEntry, error) {
+	entries := make([]DownloadDirEntry, 0, 64)
+	for _, root := range srv.managedRoots() {
+		rootClean, err := filepath.Abs(root.Host)
+		if err != nil {
+			continue
+		}
+		info, err := os.Stat(rootClean)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		err = filepath.WalkDir(rootClean, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if !d.IsDir() {
+				return nil
+			}
+			name := d.Name()
+			if strings.HasPrefix(name, ".") && path != rootClean {
+				return filepath.SkipDir
+			}
+			rel, err := filepath.Rel(rootClean, path)
+			if err != nil || hasHiddenRel(rel) {
+				return nil
+			}
+			label := root.Name
+			if rel != "." {
+				label = root.Name + "/" + filepath.ToSlash(rel)
+			}
+			entries = append(entries, DownloadDirEntry{Path: path, Label: label})
+			if len(entries) >= maxDownloadDirEntries {
+				return errors.New("download directory list truncated")
+			}
+			return nil
+		})
+		if err != nil && !strings.Contains(err.Error(), "truncated") {
+			return nil, err
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i].Label) < strings.ToLower(entries[j].Label)
 	})
 	return entries, nil
 }
@@ -759,7 +1058,7 @@ func (srv *Server) handleTerminalCreate(w http.ResponseWriter, r *http.Request) 
 	if req.CWD == "" {
 		req.CWD = srv.currentConfig().DataRoot
 	}
-	session, err := srv.createShellSession(req.CWD, "命令行", []string{"/bin/bash"})
+	session, err := srv.createShellSession(req.CWD, "命令行", []string{"/bin/bash", "-i"}, true)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -769,7 +1068,7 @@ func (srv *Server) handleTerminalCreate(w http.ResponseWriter, r *http.Request) 
 
 func (srv *Server) handleTerminalDockerBash(w http.ResponseWriter, r *http.Request) {
 	name := srv.currentConfig().ContainerName
-	session, err := srv.createShellSession(srv.currentConfig().AppRoot, "Docker bash", []string{"docker", "exec", "-i", name, "bash"})
+	session, err := srv.createShellSession(srv.currentConfig().DataRoot, "Docker bash", []string{"docker", "exec", "-it", name, "bash", "-i"}, true)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -780,52 +1079,140 @@ func (srv *Server) handleTerminalDockerBash(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"id": session.ID})
 }
 
-func (srv *Server) createShellSession(cwd, title string, argv []string) (*Session, error) {
+func (srv *Server) createShellSession(cwd, title string, argv []string, managedCWD bool) (*Session, error) {
 	if srv.sessions.UserCount() >= maxUserSessions {
 		return nil, fmt.Errorf("最多只能同时打开 %d 个普通命令行", maxUserSessions)
 	}
 	if len(argv) == 0 {
 		return nil, errors.New("empty command")
 	}
-	checkedCWD, err := safeWorkingDir(cwd, srv.currentConfig().DataRoot)
-	if err != nil {
-		return nil, err
+	var checkedCWD string
+	var err error
+	if managedCWD {
+		checkedCWD, _, _, err = srv.resolveManagedPath(cwd, true, true)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		checkedCWD, err = safeWorkingDir(cwd, srv.currentConfig().DataRoot)
+		if err != nil {
+			return nil, err
+		}
 	}
 	id := srv.sessions.NextUserID("term")
 	session := NewSession(id, title+" "+id, checkedCWD, "user", false, true)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = checkedCWD
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
+	cmd.Env = terminalEnv(os.Environ())
+	if err := startPTYSession(session, cmd); err != nil {
 		return nil, err
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	session.cmd = cmd
-	session.stdin = stdin
-	session.done = make(chan error, 1)
 	session.setRunning(true)
-	session.Append("$ " + strings.Join(argv, " "))
+	session.Append("[pty] " + strings.Join(argv, " ") + "\n")
 	srv.sessions.Add(session)
-	go pipeToSession(session, stdout)
-	go pipeToSession(session, stderr)
+	return session, nil
+}
+
+func startPTYSession(session *Session, cmd *exec.Cmd) error {
+	master, slave, err := openPTY()
+	if err != nil {
+		return err
+	}
+	cmd.Stdin = slave
+	cmd.Stdout = slave
+	cmd.Stderr = slave
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	if err := cmd.Start(); err != nil {
+		_ = master.Close()
+		_ = slave.Close()
+		return err
+	}
+	_ = slave.Close()
+
+	done := make(chan error, 1)
+	session.mu.Lock()
+	session.cmd = cmd
+	session.stdin = master
+	session.pty = master
+	session.done = done
+	session.mu.Unlock()
+
+	go pipeToSession(session, master)
 	go func() {
 		err := cmd.Wait()
 		session.setRunning(false)
-		session.Append(fmt.Sprintf("[process exited] %v", err))
-		session.done <- err
+		_ = master.Close()
+		if err != nil {
+			session.Append("\n[process exited] " + err.Error() + "\n")
+		} else {
+			session.Append("\n[process exited] ok\n")
+		}
+		done <- err
 	}()
-	return session, nil
+	return nil
+}
+
+func openPTY() (*os.File, *os.File, error) {
+	masterFD, err := syscall.Open("/dev/ptmx", syscall.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	master := os.NewFile(uintptr(masterFD), "/dev/ptmx")
+	unlock := int32(0)
+	if err := ioctl(master.Fd(), tiocsptlck, uintptr(unsafe.Pointer(&unlock))); err != nil {
+		_ = master.Close()
+		return nil, nil, err
+	}
+	var ptyNumber uint32
+	if err := ioctl(master.Fd(), tiocgptn, uintptr(unsafe.Pointer(&ptyNumber))); err != nil {
+		_ = master.Close()
+		return nil, nil, err
+	}
+	slaveName := fmt.Sprintf("/dev/pts/%d", ptyNumber)
+	slaveFD, err := syscall.Open(slaveName, syscall.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		_ = master.Close()
+		return nil, nil, err
+	}
+	slave := os.NewFile(uintptr(slaveFD), slaveName)
+	return master, slave, nil
+}
+
+func ioctl(fd uintptr, req uintptr, arg uintptr) error {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, req, arg)
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+func terminalEnv(base []string) []string {
+	env := make([]string, 0, len(base)+6)
+	blocked := map[string]struct{}{
+		"TERM": {},
+		"COLORTERM": {},
+		"CLICOLOR": {},
+		"CLICOLOR_FORCE": {},
+		"FORCE_COLOR": {},
+	}
+	for _, item := range base {
+		key := item
+		if i := strings.IndexByte(item, '='); i >= 0 {
+			key = item[:i]
+		}
+		if _, ok := blocked[key]; ok {
+			continue
+		}
+		env = append(env, item)
+	}
+	env = append(env,
+		"TERM=xterm-256color",
+		"COLORTERM=truecolor",
+		"CLICOLOR=1",
+		"CLICOLOR_FORCE=1",
+		"FORCE_COLOR=1",
+	)
+	return env
 }
 
 func (srv *Server) handleTerminalInput(w http.ResponseWriter, r *http.Request) {
@@ -887,23 +1274,43 @@ func sendControl(session *Session, control string) error {
 	cmd := session.cmd
 	stdin := session.stdin
 	session.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
-		session.Append("[control] " + control)
+
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(control)), "CTRL+L") {
+		session.Clear()
+		if stdin != nil {
+			_, _ = io.WriteString(stdin, "\x0c")
+		}
 		return nil
 	}
-	pid := cmd.Process.Pid
+	if data, ok := controlBytes(control); ok {
+		if stdin != nil {
+			_, err := stdin.Write(data)
+			if err == nil {
+				return nil
+			}
+		}
+		if cmd != nil && cmd.Process != nil && len(data) == 1 {
+			switch data[0] {
+			case 0x03:
+				return syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+			case 0x1a:
+				return syscall.Kill(-cmd.Process.Pid, syscall.SIGTSTP)
+			}
+		}
+	}
+	if cmd == nil || cmd.Process == nil {
+		session.Append("[control] " + control + "\n")
+		return nil
+	}
 	switch {
 	case strings.HasPrefix(control, "Ctrl+C"):
-		return syscall.Kill(-pid, syscall.SIGINT)
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
 	case strings.HasPrefix(control, "Ctrl+Z"):
-		return syscall.Kill(-pid, syscall.SIGTSTP)
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTSTP)
 	case strings.HasPrefix(control, "Ctrl+D"):
 		if stdin != nil {
 			return stdin.Close()
 		}
-	case strings.HasPrefix(control, "Ctrl+L"):
-		session.Append("\x0c")
-		return nil
 	case strings.HasPrefix(control, "Tab"):
 		if stdin != nil {
 			_, err := io.WriteString(stdin, "\t")
@@ -915,8 +1322,49 @@ func sendControl(session *Session, control string) error {
 			return err
 		}
 	}
-	session.Append("[control] " + control)
+	session.Append("[control] " + control + "\n")
 	return nil
+}
+
+func controlBytes(control string) ([]byte, bool) {
+	name := strings.ToUpper(strings.TrimSpace(control))
+	if i := strings.IndexAny(name, " \t"); i >= 0 {
+		name = name[:i]
+	}
+	switch name {
+	case "TAB":
+		return []byte{'\t'}, true
+	case "ESC", "ESCAPE":
+		return []byte{0x1b}, true
+	case "ENTER", "RETURN":
+		return []byte{'\r'}, true
+	}
+	if !strings.HasPrefix(name, "CTRL+") {
+		return nil, false
+	}
+	key := strings.TrimPrefix(name, "CTRL+")
+	if key == "" {
+		return nil, false
+	}
+	switch key {
+	case "SPACE":
+		return []byte{0x00}, true
+	case "[":
+		return []byte{0x1b}, true
+	case "\\":
+		return []byte{0x1c}, true
+	case "]":
+		return []byte{0x1d}, true
+	case "^":
+		return []byte{0x1e}, true
+	case "_":
+		return []byte{0x1f}, true
+	}
+	ch := key[0]
+	if ch >= 'A' && ch <= 'Z' {
+		return []byte{ch - 'A' + 1}, true
+	}
+	return nil, false
 }
 
 func (srv *Server) handleTerminalClose(w http.ResponseWriter, r *http.Request) {
@@ -1033,6 +1481,12 @@ func (srv *Server) handleDownloadStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("method must be wget, git clone, or git pull"))
 		return
 	}
+	dir, _, _, err := srv.resolveManagedPath(req.Dir, true, true)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	req.Dir = dir
 	req.ID = time.Now().UnixNano()
 	select {
 	case srv.downloads <- req:
@@ -1049,14 +1503,11 @@ func (srv *Server) downloadWorker() {
 		if session == nil {
 			continue
 		}
+		session.mu.Lock()
 		session.CWD = task.Dir
+		session.mu.Unlock()
 		session.Append(fmt.Sprintf("[download #%d] %s", task.ID, task.Method))
-		if task.Method == "wget" || task.Method == "git clone" {
-			if err := os.MkdirAll(task.Dir, 0755); err != nil {
-				session.Append("[error] mkdir: " + err.Error())
-				continue
-			}
-		} else if _, err := safeWorkingDir(task.Dir, task.Dir); err != nil {
+		if _, _, _, err := srv.resolveManagedPath(task.Dir, true, true); err != nil {
 			session.Append("[error] " + err.Error())
 			continue
 		}
@@ -1093,6 +1544,7 @@ func (srv *Server) proxyEnv() []string {
 }
 
 func (srv *Server) handleClashState(w http.ResponseWriter, r *http.Request) {
+	systemProxy, systemProxyChecked := srv.detectSystemProxy()
 	srv.clashMu.RLock()
 	state := map[string]any{
 		"mode": srv.clashMode,
@@ -1100,6 +1552,8 @@ func (srv *Server) handleClashState(w http.ResponseWriter, r *http.Request) {
 		"apiChecked": srv.clashAPIChecked,
 		"appRunning": srv.clashRunning,
 		"appChecked": srv.clashRunningChecked,
+		"systemProxy": systemProxy,
+		"systemProxyChecked": systemProxyChecked,
 	}
 	srv.clashMu.RUnlock()
 	state["downloadProxy"] = srv.isDownloadProxyEnabled()
@@ -1107,24 +1561,20 @@ func (srv *Server) handleClashState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleClashDetect(w http.ResponseWriter, r *http.Request) {
-	cfg := srv.currentConfig()
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, strings.TrimRight(cfg.ClashControllerURL, "/")+"/version", nil)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if cfg.ClashSecret != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.ClashSecret)
-	}
-	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Do(req)
-	ok := err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300
-	if resp != nil {
-		_ = resp.Body.Close()
+	base, _, _, err := srv.clashAPIRequest(r.Context(), http.MethodGet, "/version", nil)
+	ok := err == nil
+	mode := srv.currentClashMode()
+	if ok {
+		if _, _, data, cfgErr := srv.clashAPIRequest(r.Context(), http.MethodGet, "/configs", nil); cfgErr == nil {
+			if nextMode := parseClashMode(data); nextMode != "" {
+				mode = nextMode
+			}
+		}
 	}
 	srv.clashMu.Lock()
 	srv.clashAPI = ok
 	srv.clashAPIChecked = true
+	srv.clashMode = mode
 	if ok {
 		srv.clashRunning = true
 		srv.clashRunningChecked = true
@@ -1134,10 +1584,10 @@ func (srv *Server) handleClashDetect(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			downloads.Append("[clash] detect failed: " + err.Error())
 		} else {
-			downloads.Append(fmt.Sprintf("[clash] detect api: %v", ok))
+			downloads.Append(fmt.Sprintf("[clash] detect api: %v url=%s mode=%s\n", ok, base, mode))
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": ok, "error": errString(err)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": ok, "url": base, "mode": mode, "error": errString(err)})
 }
 
 func (srv *Server) handleClashMode(w http.ResponseWriter, r *http.Request) {
@@ -1154,30 +1604,19 @@ func (srv *Server) handleClashMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, _ := json.Marshal(map[string]string{"mode": apiMode})
-	cfg := srv.currentConfig()
-	url := strings.TrimRight(cfg.ClashControllerURL, "/") + "/configs"
-	httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodPatch, url, bytes.NewReader(body))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if cfg.ClashSecret != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+cfg.ClashSecret)
-	}
-	client := http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(httpReq)
-	apiOK := err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300
-	if resp != nil {
-		_ = resp.Body.Close()
-	}
+	base, _, _, err := srv.clashAPIRequest(r.Context(), http.MethodPatch, "/configs", body)
+	apiOK := err == nil
 	srv.clashMu.Lock()
-	srv.clashMode = mode
 	srv.clashAPI = apiOK
 	srv.clashAPIChecked = true
+	if apiOK {
+		srv.clashMode = mode
+		srv.clashRunning = true
+		srv.clashRunningChecked = true
+	}
 	srv.clashMu.Unlock()
 	if downloads, ok := srv.sessions.Get("downloads"); ok {
-		downloads.Append(fmt.Sprintf("[clash] PATCH /configs mode=%s apiOK=%v error=%s", apiMode, apiOK, errString(err)))
+		downloads.Append(fmt.Sprintf("[clash] PATCH %s/configs mode=%s apiOK=%v error=%s\n", base, apiMode, apiOK, errString(err)))
 	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
@@ -1194,13 +1633,17 @@ func (srv *Server) handleClashProxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if err := srv.setSystemProxy(r.Context(), req.Enabled); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
 	srv.dlMu.Lock()
 	srv.downloadProxy = req.Enabled
 	srv.dlMu.Unlock()
 	if downloads, ok := srv.sessions.Get("downloads"); ok {
-		downloads.Append(fmt.Sprintf("[proxy] download proxy enabled=%v", req.Enabled))
+		downloads.Append(fmt.Sprintf("[proxy] system proxy enabled=%v; download proxy env enabled=%v\n", req.Enabled, req.Enabled))
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"enabled": req.Enabled})
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": req.Enabled, "systemProxy": req.Enabled, "downloadProxy": req.Enabled})
 }
 
 func (srv *Server) handleClashStart(w http.ResponseWriter, r *http.Request) {
@@ -1231,6 +1674,53 @@ func (srv *Server) handleClashStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]bool{"stopped": true})
 }
 
+func (srv *Server) handleServiceStop(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusAccepted, map[string]bool{"stopping": true})
+	go srv.stopService(false)
+}
+
+func (srv *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusAccepted, map[string]bool{"restarting": true})
+	go srv.stopService(true)
+}
+
+func (srv *Server) stopService(restart bool) {
+	srv.serviceOnce.Do(func() {
+		time.Sleep(350 * time.Millisecond)
+		if restart {
+			if err := startSelfAfterDelay(); err != nil {
+				log.Printf("self restart failed: %v", err)
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.shutdownSessions()
+		if srv.httpServer != nil {
+			_ = srv.httpServer.Shutdown(ctx)
+		}
+		os.Exit(0)
+	})
+}
+
+func startSelfAfterDelay() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	wd, _ := os.Getwd()
+	args := append([]string{"-c", "sleep 0.6; exec \"$0\" \"$@\"", exe}, os.Args[1:]...)
+	cmd := exec.Command("/bin/sh", args...)
+	cmd.Dir = wd
+	cmd.Env = os.Environ()
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
 func normalizeMode(mode string) (string, string, bool) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "rule", "rules":
@@ -1242,6 +1732,301 @@ func normalizeMode(mode string) (string, string, bool) {
 	default:
 		return "", "", false
 	}
+}
+
+func (srv *Server) currentClashMode() string {
+	srv.clashMu.RLock()
+	defer srv.clashMu.RUnlock()
+	if srv.clashMode == "" {
+		return "rule"
+	}
+	return srv.clashMode
+}
+
+func parseClashMode(data []byte) string {
+	var cfg struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return ""
+	}
+	mode, _, ok := normalizeMode(cfg.Mode)
+	if !ok {
+		return ""
+	}
+	return mode
+}
+
+func (srv *Server) clashControllerURLs() []string {
+	cfg := srv.currentConfig()
+	candidates := []string{
+		strings.TrimRight(cfg.ClashControllerURL, "/"),
+		"http://127.0.0.1:9090",
+		"http://127.0.0.1:9097",
+		"http://127.0.0.1:9091",
+	}
+	out := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, item := range candidates {
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func (srv *Server) clashAPIRequest(ctx context.Context, method, apiPath string, body []byte) (string, int, []byte, error) {
+	cfg := srv.currentConfig()
+	var lastErr error
+	for _, base := range srv.clashControllerURLs() {
+		req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(base, "/")+apiPath, bytes.NewReader(body))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if cfg.ClashSecret != "" {
+			req.Header.Set("Authorization", "Bearer "+cfg.ClashSecret)
+		}
+		client := http.Client{Timeout: 3 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			srv.rememberClashURL(base)
+			return base, resp.StatusCode, data, nil
+		}
+		lastErr = fmt.Errorf("%s %s returned HTTP %d: %s", method, base+apiPath, resp.StatusCode, strings.TrimSpace(string(data)))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			break
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("clash controller api is not reachable")
+	}
+	return "", 0, nil, lastErr
+}
+
+func (srv *Server) rememberClashURL(base string) {
+	cfg := srv.currentConfig()
+	if strings.TrimRight(cfg.ClashControllerURL, "/") == base {
+		return
+	}
+	cfg.ClashControllerURL = base
+	srv.cfgMu.Lock()
+	srv.cfg.ClashControllerURL = base
+	srv.cfgMu.Unlock()
+}
+
+func (srv *Server) setSystemProxy(ctx context.Context, enabled bool) error {
+	var failures []string
+	if err := srv.setGSettingsProxy(ctx, enabled); err != nil {
+		failures = append(failures, "gsettings: "+err.Error())
+	}
+	if err := srv.patchClashVergeSystemProxy(enabled); err != nil {
+		failures = append(failures, "verge.yaml: "+err.Error())
+	}
+	if len(failures) == 2 {
+		return errors.New(strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+func (srv *Server) setGSettingsProxy(ctx context.Context, enabled bool) error {
+	if _, err := exec.LookPath("gsettings"); err != nil {
+		return err
+	}
+	if !enabled {
+		_, err := runCommandTimeout(ctx, 5*time.Second, "gsettings", "set", "org.gnome.system.proxy", "mode", "none")
+		return err
+	}
+	cfg := srv.currentConfig()
+	httpHost, httpPort, err := proxyHostPort(cfg.HTTPProxy, "127.0.0.1", 7890)
+	if err != nil {
+		return err
+	}
+	socksHost, socksPort, err := proxyHostPort(cfg.SocksProxy, httpHost, 7891)
+	if err != nil {
+		return err
+	}
+	commands := [][]string{
+		{"gsettings", "set", "org.gnome.system.proxy.http", "host", httpHost},
+		{"gsettings", "set", "org.gnome.system.proxy.http", "port", strconv.Itoa(httpPort)},
+		{"gsettings", "set", "org.gnome.system.proxy.https", "host", httpHost},
+		{"gsettings", "set", "org.gnome.system.proxy.https", "port", strconv.Itoa(httpPort)},
+		{"gsettings", "set", "org.gnome.system.proxy.socks", "host", socksHost},
+		{"gsettings", "set", "org.gnome.system.proxy.socks", "port", strconv.Itoa(socksPort)},
+		{"gsettings", "set", "org.gnome.system.proxy", "ignore-hosts", "['localhost','127.0.0.0/8','::1']"},
+		{"gsettings", "set", "org.gnome.system.proxy", "mode", "manual"},
+	}
+	for _, argv := range commands {
+		if _, err := runCommandTimeout(ctx, 5*time.Second, argv[0], argv[1:]...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (srv *Server) detectSystemProxy() (bool, bool) {
+	if _, err := exec.LookPath("gsettings"); err == nil {
+		out, err := runCommandTimeout(context.Background(), 2*time.Second, "gsettings", "get", "org.gnome.system.proxy", "mode")
+		if err == nil {
+			mode := strings.Trim(out, " \n\r\t'")
+			if mode == "manual" || mode == "auto" {
+				return true, true
+			}
+			if mode == "none" {
+				return false, true
+			}
+		}
+	}
+	enabled, err := srv.readClashVergeSystemProxy()
+	if err == nil {
+		return enabled, true
+	}
+	return false, false
+}
+
+func proxyHostPort(raw, fallbackHost string, fallbackPort int) (string, int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return fallbackHost, fallbackPort, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", 0, err
+	}
+	host := u.Hostname()
+	if host == "" {
+		host = fallbackHost
+	}
+	port := fallbackPort
+	if u.Port() != "" {
+		parsed, err := strconv.Atoi(u.Port())
+		if err != nil {
+			return "", 0, err
+		}
+		port = parsed
+	}
+	return host, port, nil
+}
+
+func (srv *Server) patchClashVergeSystemProxy(enabled bool) error {
+	var lastErr error
+	for _, path := range srv.clashVergeConfigCandidates() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		next := patchSimpleYAMLBool(string(data), "enable_system_proxy", enabled)
+		return os.WriteFile(path, []byte(next), 0600)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("verge config path is empty")
+	}
+	return lastErr
+}
+
+func (srv *Server) readClashVergeSystemProxy() (bool, error) {
+	var lastErr error
+	for _, path := range srv.clashVergeConfigCandidates() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "enable_system_proxy:") {
+				value := strings.TrimSpace(strings.TrimPrefix(trimmed, "enable_system_proxy:"))
+				return strings.EqualFold(value, "true"), nil
+			}
+		}
+		lastErr = errors.New("enable_system_proxy not found")
+	}
+	if lastErr == nil {
+		lastErr = errors.New("verge config path is empty")
+	}
+	return false, lastErr
+}
+
+func (srv *Server) clashVergeConfigCandidates() []string {
+	cfg := srv.currentConfig()
+	candidates := []string{
+		cfg.ClashVergeConfigPath,
+		defaultClashVergeConfig,
+		"~/.config/clash-verge-rev/verge.yaml",
+		"~/.config/clash-verge/verge.yaml",
+	}
+	out := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, item := range candidates {
+		item = expandHome(strings.TrimSpace(item))
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func patchSimpleYAMLBool(data, key string, value bool) string {
+	lines := strings.Split(data, "\n")
+	valueText := "false"
+	if value {
+		valueText = "true"
+	}
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, key+":") {
+			prefixLen := len(line) - len(strings.TrimLeft(line, " \t"))
+			lines[i] = line[:prefixLen] + key + ": " + valueText
+			found = true
+		}
+	}
+	if !found {
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines[len(lines)-1] = key + ": " + valueText
+			lines = append(lines, "")
+		} else {
+			lines = append(lines, key+": "+valueText)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func expandHome(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
 }
 
 func (srv *Server) runConfiguredAction(title, command string, detach bool) {
@@ -1336,6 +2121,9 @@ func pipeToSession(session *Session, r io.Reader) {
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
+				if pathErr, ok := err.(*os.PathError); ok && errors.Is(pathErr.Err, syscall.EIO) {
+					return
+				}
 				session.Append("[read error] " + err.Error())
 			}
 			return
@@ -1344,7 +2132,11 @@ func pipeToSession(session *Session, r io.Reader) {
 }
 
 func runCommand(ctx context.Context, name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	return runCommandTimeout(ctx, 30*time.Second, name, args...)
+}
+
+func runCommandTimeout(ctx context.Context, timeout time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	var out bytes.Buffer
@@ -1377,7 +2169,8 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func writeSSE(w io.Writer, ev Event) {
 	_, _ = fmt.Fprintf(w, "id: %d\n", ev.Seq)
-	for _, line := range strings.Split(ev.Data, "\n") {
+	data := strings.ReplaceAll(ev.Data, "\r", "\n")
+	for _, line := range strings.Split(data, "\n") {
 		_, _ = io.WriteString(w, "data: "+line+"\n")
 	}
 	_, _ = io.WriteString(w, "\n")

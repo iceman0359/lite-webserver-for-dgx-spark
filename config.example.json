@@ -17,8 +17,17 @@
   ],
   "clashControllerUrl": "http://127.0.0.1:9090",
   "clashSecret": "",
+  "clashVergeConfigPath": "~/.config/io.github.clash-verge-rev.clash-verge-rev/verge.yaml",
   "clashStartCommand": "clash-verge",
   "clashStopCommand": "pkill -TERM -f 'clash-verge|Clash Verge'",
   "httpProxy": "http://127.0.0.1:7890",
-  "socksProxy": "socks5://127.0.0.1:7891"
+  "socksProxy": "socks5://127.0.0.1:7891",
+  "controlButtons": [
+    "Ctrl+C 中断",
+    "Ctrl+D 结束输入",
+    "Ctrl+Z 挂起",
+    "Ctrl+L 清屏",
+    "Tab 补全",
+    "Esc 取消"
+  ]
 }
