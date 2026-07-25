@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "dist/**"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   smoke-test:
@@ -80,3 +82,19 @@ jobs:
           path: |
             comfyui-manager-linux-arm64.tar.gz
             comfyui-manager-linux-arm64.sha256
+
+      - name: Commit build to dist
+        run: |
+          set -eux
+          mkdir -p dist
+          cp comfyui-manager-linux-arm64.tar.gz dist/
+          cp comfyui-manager-linux-arm64.sha256 dist/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dist/comfyui-manager-linux-arm64.tar.gz dist/comfyui-manager-linux-arm64.sha256
+          if git diff --cached --quiet; then
+            echo "No dist changes."
+          else
+            git commit -m "Add linux arm64 build [skip ci]"
+            git push
+          fi
