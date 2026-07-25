@@ -1,0 +1,82 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    name: Smoke Test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+
+      - name: Build native test binary
+        run: go build -trimpath -ldflags="-s -w" -o comfyui-manager-smoke .
+
+      - name: Run health check
+        run: |
+          set -eux
+          ./comfyui-manager-smoke >server.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8848/api/health; then
+              kill "$pid"
+              wait "$pid" || true
+              exit 0
+            fi
+            sleep 0.25
+          done
+          cat server.log
+          kill "$pid" || true
+          exit 1
+
+  build-arm64:
+    name: Build Linux arm64
+    runs-on: ubuntu-24.04
+    needs: smoke-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+
+      - name: Build linux arm64 binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: arm64
+        run: |
+          set -eux
+          go build -trimpath -ldflags="-s -w" -o comfyui-manager-linux-arm64 .
+          sha256sum comfyui-manager-linux-arm64 > comfyui-manager-linux-arm64.sha256
+          tar -czf comfyui-manager-linux-arm64.tar.gz \
+            comfyui-manager-linux-arm64 \
+            comfyui-manager-linux-arm64.sha256 \
+            config.example.json \
+            start.sh \
+            install-systemd.sh \
+            comfyui-manager.service \
+            README.md
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: comfyui-manager-linux-arm64
+          path: |
+            comfyui-manager-linux-arm64.tar.gz
+            comfyui-manager-linux-arm64.sha256
