@@ -32,8 +32,10 @@ var staticFiles embed.FS
 
 const (
 	maxUserSessions = 4
-	maxSessionBytes = 256 * 1024
-	maxSessionEvents = 256
+	maxSessionBytes = 128 * 1024
+	maxSessionEvents = 160
+	maxDownloadSessionBytes = 32 * 1024
+	maxDownloadSessionEvents = 48
 	maxSessionSubscribers = 16
 	maxFileEntries = 4000
 	maxDownloadDirEntries = 2000
@@ -52,6 +54,7 @@ const (
 )
 
 type Config struct {
+	ConfigPath        string   `json:"configPath,omitempty"`
 	BindHost          string   `json:"bindHost"`
 	Port              int      `json:"port"`
 	ContainerName     string   `json:"containerName"`
@@ -59,28 +62,41 @@ type Config struct {
 	DataRoot          string   `json:"dataRoot"`
 	ContainerDataRoot string   `json:"containerDataRoot"`
 	ModelsPath        string   `json:"modelsPath"`
+	OutputPath        string   `json:"outputPath"`
+	CustomNodesPath   string   `json:"customNodesPath"`
+	InputPath         string   `json:"inputPath"`
+	UserPath          string   `json:"userPath"`
 	DownloadDirs      []string `json:"downloadDirs"`
 
-	ClashControllerURL string `json:"clashControllerUrl"`
-	ClashSecret        string `json:"clashSecret"`
-	ClashVergeConfigPath string `json:"clashVergeConfigPath"`
-	ClashStartCommand  string `json:"clashStartCommand"`
-	ClashStopCommand   string `json:"clashStopCommand"`
-	HTTPProxy          string `json:"httpProxy"`
-	SocksProxy         string `json:"socksProxy"`
-	ControlButtons     []string `json:"controlButtons"`
+	ClashControllerURL            string `json:"clashControllerUrl"`
+	ClashSecret                   string `json:"clashSecret"`
+	ClashVergeConfigPath          string `json:"clashVergeConfigPath"`
+	ClashSystemProxyOnCommand     string `json:"clashSystemProxyOnCommand"`
+	ClashSystemProxyOffCommand    string `json:"clashSystemProxyOffCommand"`
+	ClashRuleModeCommand          string `json:"clashRuleModeCommand"`
+	ClashGlobalModeCommand        string `json:"clashGlobalModeCommand"`
+	ClashDirectModeCommand        string `json:"clashDirectModeCommand"`
+	ClashStartCommand             string `json:"clashStartCommand"`
+	ClashStopCommand              string `json:"clashStopCommand"`
+	HTTPProxy                     string `json:"httpProxy"`
+	SocksProxy                    string `json:"socksProxy"`
+	ControlButtons                []string `json:"controlButtons"`
 }
 
 func defaultConfig() Config {
 	return Config{
-		BindHost:           "127.0.0.1",
-		Port:               8848,
-		ContainerName:      "comfyui",
-		AppRoot:            defaultAppRoot,
-		DataRoot:           defaultDataRoot,
-		ContainerDataRoot:  defaultContainerRoot,
-		ModelsPath:         defaultModelsRoot,
-		DownloadDirs:       []string{
+		BindHost:          "127.0.0.1",
+		Port:              8848,
+		ContainerName:     "comfyui",
+		AppRoot:           defaultAppRoot,
+		DataRoot:          defaultDataRoot,
+		ContainerDataRoot: defaultContainerRoot,
+		ModelsPath:        defaultModelsRoot,
+		OutputPath:        defaultDataRoot + "/output",
+		CustomNodesPath:   defaultDataRoot + "/custom_nodes",
+		InputPath:         defaultDataRoot + "/input",
+		UserPath:          defaultDataRoot + "/user",
+		DownloadDirs: []string{
 			defaultModelsRoot + "/checkpoints",
 			defaultModelsRoot + "/loras",
 			defaultModelsRoot + "/vae",
@@ -89,13 +105,13 @@ func defaultConfig() Config {
 			defaultDataRoot + "/output",
 			defaultDataRoot + "/user",
 		},
-		ClashControllerURL: "http://127.0.0.1:9090",
+		ClashControllerURL:    "http://127.0.0.1:9090",
 		ClashVergeConfigPath: defaultClashVergeConfig,
-		ClashStartCommand:  "clash-verge",
-		ClashStopCommand:   "pkill -TERM -f 'clash-verge|Clash Verge'",
-		HTTPProxy:          "http://127.0.0.1:7890",
-		SocksProxy:         "socks5://127.0.0.1:7891",
-		ControlButtons:     []string{"Ctrl+C 中断", "Ctrl+D 结束输入", "Ctrl+Z 挂起", "Ctrl+L 清屏", "Tab 补全", "Esc 取消"},
+		ClashStartCommand:     "clash-verge",
+		ClashStopCommand:      "pkill -TERM -f 'clash-verge|Clash Verge'",
+		HTTPProxy:             "http://127.0.0.1:7890",
+		SocksProxy:            "socks5://127.0.0.1:7891",
+		ControlButtons:        []string{"Ctrl+C 中断", "Ctrl+D 结束输入", "Ctrl+Z 挂起", "Ctrl+L 清屏", "Tab 补全", "Esc 取消"},
 	}
 }
 
@@ -139,11 +155,14 @@ type Session struct {
 	stdin io.WriteCloser
 	pty *os.File
 	done chan error
+	trackCWD bool
 
 	seq uint64
 	byteCount int
 	events []Event
 	subs map[chan Event]struct{}
+	MaxBytes int
+	MaxEvents int
 }
 
 type SessionHub struct {
@@ -242,9 +261,26 @@ func saveConfig(path string, cfg Config) error {
 }
 
 func normalizeConfig(cfg *Config) {
+	cfg.ConfigPath = ""
 	cfg.AppRoot = defaultAppRoot
 	cfg.DataRoot = defaultDataRoot
 	cfg.ModelsPath = defaultModelsRoot
+	if strings.TrimSpace(cfg.OutputPath) == "" {
+		cfg.OutputPath = defaultDataRoot + "/output"
+	}
+	if strings.TrimSpace(cfg.CustomNodesPath) == "" {
+		cfg.CustomNodesPath = defaultDataRoot + "/custom_nodes"
+	}
+	if strings.TrimSpace(cfg.InputPath) == "" {
+		cfg.InputPath = defaultDataRoot + "/input"
+	}
+	if strings.TrimSpace(cfg.UserPath) == "" {
+		cfg.UserPath = defaultDataRoot + "/user"
+	}
+	cfg.OutputPath = strings.TrimSpace(cfg.OutputPath)
+	cfg.CustomNodesPath = strings.TrimSpace(cfg.CustomNodesPath)
+	cfg.InputPath = strings.TrimSpace(cfg.InputPath)
+	cfg.UserPath = strings.TrimSpace(cfg.UserPath)
 	if strings.TrimSpace(cfg.BindHost) == "" {
 		cfg.BindHost = "127.0.0.1"
 	}
@@ -263,6 +299,11 @@ func normalizeConfig(cfg *Config) {
 	if strings.TrimSpace(cfg.ClashVergeConfigPath) == "" {
 		cfg.ClashVergeConfigPath = defaultClashVergeConfig
 	}
+	cfg.ClashSystemProxyOnCommand = strings.TrimSpace(cfg.ClashSystemProxyOnCommand)
+	cfg.ClashSystemProxyOffCommand = strings.TrimSpace(cfg.ClashSystemProxyOffCommand)
+	cfg.ClashRuleModeCommand = strings.TrimSpace(cfg.ClashRuleModeCommand)
+	cfg.ClashGlobalModeCommand = strings.TrimSpace(cfg.ClashGlobalModeCommand)
+	cfg.ClashDirectModeCommand = strings.TrimSpace(cfg.ClashDirectModeCommand)
 	if strings.TrimSpace(cfg.ClashStartCommand) == "" {
 		cfg.ClashStartCommand = "clash-verge"
 	}
@@ -314,6 +355,8 @@ func NewSession(id, title, cwd, kind string, fixed, closable bool) *Session {
 		Closable: closable,
 		Running: false,
 		subs: make(map[chan Event]struct{}),
+		MaxBytes: maxSessionBytes,
+		MaxEvents: maxSessionEvents,
 	}
 }
 
@@ -385,7 +428,15 @@ func (s *Session) Append(data string) {
 	ev.Seq = s.seq
 	s.events = append(s.events, ev)
 	s.byteCount += len(ev.Data)
-	for len(s.events) > 0 && (s.byteCount > maxSessionBytes || len(s.events) > maxSessionEvents) {
+	maxBytes := s.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = maxSessionBytes
+	}
+	maxEvents := s.MaxEvents
+	if maxEvents <= 0 {
+		maxEvents = maxSessionEvents
+	}
+	for len(s.events) > 0 && (s.byteCount > maxBytes || len(s.events) > maxEvents) {
 		s.byteCount -= len(s.events[0].Data)
 		s.events = s.events[1:]
 	}
@@ -466,6 +517,8 @@ func (srv *Server) initFixedSessions() {
 		downloadCWD = srv.cfg.DownloadDirs[0]
 	}
 	downloader := NewSession("downloads", "下载器输出", downloadCWD, "fixed", true, false)
+	downloader.MaxBytes = maxDownloadSessionBytes
+	downloader.MaxEvents = maxDownloadSessionEvents
 	downloader.Append("[downloader] fixed output session.")
 	downloader.Append("[downloader] 下载、更新和代理切换日志会输出在这里。")
 	srv.sessions.Add(downloader)
@@ -594,7 +647,9 @@ func (srv *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (srv *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, srv.currentConfig())
+		cfg := srv.currentConfig()
+		cfg.ConfigPath = "config.json"
+		writeJSON(w, http.StatusOK, cfg)
 	case http.MethodPost:
 		cfg := srv.currentConfig()
 		if err := readJSON(r, &cfg); err != nil {
@@ -969,33 +1024,23 @@ func (srv *Server) listManagedDownloadDirs() ([]DownloadDirEntry, error) {
 		if err != nil || !info.IsDir() {
 			continue
 		}
-		err = filepath.WalkDir(rootClean, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if !d.IsDir() {
-				return nil
-			}
-			name := d.Name()
-			if strings.HasPrefix(name, ".") && path != rootClean {
-				return filepath.SkipDir
-			}
-			rel, err := filepath.Rel(rootClean, path)
-			if err != nil || hasHiddenRel(rel) {
-				return nil
-			}
-			label := root.Name
-			if rel != "." {
-				label = root.Name + "/" + filepath.ToSlash(rel)
-			}
-			entries = append(entries, DownloadDirEntry{Path: path, Label: label})
-			if len(entries) >= maxDownloadDirEntries {
-				return errors.New("download directory list truncated")
-			}
-			return nil
-		})
-		if err != nil && !strings.Contains(err.Error(), "truncated") {
+		entries = append(entries, DownloadDirEntry{Path: rootClean, Label: root.Name})
+		children, err := os.ReadDir(rootClean)
+		if err != nil {
 			return nil, err
+		}
+		for _, child := range children {
+			if len(entries) >= maxDownloadDirEntries {
+				break
+			}
+			name := child.Name()
+			if strings.HasPrefix(name, ".") || !child.IsDir() {
+				continue
+			}
+			entries = append(entries, DownloadDirEntry{
+				Path: filepath.Join(rootClean, name),
+				Label: root.Name + "/" + name,
+			})
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -1043,6 +1088,9 @@ func (srv *Server) handleTerminalSessions(w http.ResponseWriter, r *http.Request
 	list := srv.sessions.List()
 	resp := make([]sessionView, 0, len(list))
 	for _, s := range list {
+		if s.ID == "downloads" {
+			continue
+		}
 		s.mu.Lock()
 		resp = append(resp, sessionView{s.ID, s.Title, s.CWD, s.Kind, s.Fixed, s.Closable, s.Running})
 		s.mu.Unlock()
@@ -1058,7 +1106,7 @@ func (srv *Server) handleTerminalCreate(w http.ResponseWriter, r *http.Request) 
 	if req.CWD == "" {
 		req.CWD = srv.currentConfig().DataRoot
 	}
-	session, err := srv.createShellSession(req.CWD, "命令行", []string{"/bin/bash", "-i"}, true)
+	session, err := srv.createShellSession(req.CWD, "命令行", []string{"/bin/bash", "-i"}, true, true)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -1068,7 +1116,7 @@ func (srv *Server) handleTerminalCreate(w http.ResponseWriter, r *http.Request) 
 
 func (srv *Server) handleTerminalDockerBash(w http.ResponseWriter, r *http.Request) {
 	name := srv.currentConfig().ContainerName
-	session, err := srv.createShellSession(srv.currentConfig().DataRoot, "Docker bash", []string{"docker", "exec", "-it", name, "bash", "-i"}, true)
+	session, err := srv.createShellSession(srv.currentConfig().DataRoot, "Docker bash", []string{"docker", "exec", "-it", name, "bash", "-i"}, true, false)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -1079,7 +1127,7 @@ func (srv *Server) handleTerminalDockerBash(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"id": session.ID})
 }
 
-func (srv *Server) createShellSession(cwd, title string, argv []string, managedCWD bool) (*Session, error) {
+func (srv *Server) createShellSession(cwd, title string, argv []string, managedCWD, trackCWD bool) (*Session, error) {
 	if srv.sessions.UserCount() >= maxUserSessions {
 		return nil, fmt.Errorf("最多只能同时打开 %d 个普通命令行", maxUserSessions)
 	}
@@ -1101,6 +1149,7 @@ func (srv *Server) createShellSession(cwd, title string, argv []string, managedC
 	}
 	id := srv.sessions.NextUserID("term")
 	session := NewSession(id, title+" "+id, checkedCWD, "user", false, true)
+	session.trackCWD = trackCWD
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = checkedCWD
 	cmd.Env = terminalEnv(os.Environ())
@@ -1245,7 +1294,34 @@ func (srv *Server) handleTerminalInput(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	cwd := refreshProcessCWD(session, 80*time.Millisecond)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cwd": cwd})
+}
+
+func refreshProcessCWD(session *Session, settle time.Duration) string {
+	session.mu.Lock()
+	cwd := session.CWD
+	track := session.trackCWD
+	cmd := session.cmd
+	session.mu.Unlock()
+	if !track || cmd == nil || cmd.Process == nil {
+		return cwd
+	}
+	if settle > 0 {
+		time.Sleep(settle)
+	}
+	target, err := os.Readlink("/proc/" + strconv.Itoa(cmd.Process.Pid) + "/cwd")
+	if err != nil || target == "" {
+		return cwd
+	}
+	clean, err := filepath.Abs(target)
+	if err != nil {
+		return cwd
+	}
+	session.mu.Lock()
+	session.CWD = clean
+	session.mu.Unlock()
+	return clean
 }
 
 func (srv *Server) handleTerminalControl(w http.ResponseWriter, r *http.Request) {
@@ -1603,26 +1679,39 @@ func (srv *Server) handleClashMode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("mode must be rule, global, or direct"))
 		return
 	}
+	cfg := srv.currentConfig()
 	body, _ := json.Marshal(map[string]string{"mode": apiMode})
 	base, _, _, err := srv.clashAPIRequest(r.Context(), http.MethodPatch, "/configs", body)
 	apiOK := err == nil
+	commandOK := false
+	command := clashModeCommand(cfg, mode)
+	if !apiOK && command != "" {
+		if cmdErr := srv.runConfiguredActionSync(r.Context(), "Clash Verge "+clashModeName(mode), command, 8*time.Second); cmdErr == nil {
+			err = nil
+			commandOK = true
+		} else {
+			err = fmt.Errorf("api: %v; command: %w", err, cmdErr)
+		}
+	}
 	srv.clashMu.Lock()
 	srv.clashAPI = apiOK
 	srv.clashAPIChecked = true
-	if apiOK {
+	if apiOK || commandOK {
 		srv.clashMode = mode
-		srv.clashRunning = true
-		srv.clashRunningChecked = true
+		if apiOK {
+			srv.clashRunning = true
+			srv.clashRunningChecked = true
+		}
 	}
 	srv.clashMu.Unlock()
 	if downloads, ok := srv.sessions.Get("downloads"); ok {
-		downloads.Append(fmt.Sprintf("[clash] PATCH %s/configs mode=%s apiOK=%v error=%s\n", base, apiMode, apiOK, errString(err)))
+		downloads.Append(fmt.Sprintf("[clash] PATCH %s/configs mode=%s apiOK=%v commandOK=%v error=%s\n", base, apiMode, apiOK, commandOK, errString(err)))
 	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"mode": mode, "apiOK": apiOK})
+	writeJSON(w, http.StatusOK, map[string]any{"mode": mode, "apiOK": apiOK, "commandOK": commandOK})
 }
 
 func (srv *Server) handleClashProxy(w http.ResponseWriter, r *http.Request) {
@@ -1734,6 +1823,32 @@ func normalizeMode(mode string) (string, string, bool) {
 	}
 }
 
+func clashModeCommand(cfg Config, mode string) string {
+	switch mode {
+	case "rule":
+		return strings.TrimSpace(cfg.ClashRuleModeCommand)
+	case "global":
+		return strings.TrimSpace(cfg.ClashGlobalModeCommand)
+	case "direct":
+		return strings.TrimSpace(cfg.ClashDirectModeCommand)
+	default:
+		return ""
+	}
+}
+
+func clashModeName(mode string) string {
+	switch mode {
+	case "rule":
+		return "规则模式"
+	case "global":
+		return "全局模式"
+	case "direct":
+		return "直连模式"
+	default:
+		return mode
+	}
+}
+
 func (srv *Server) currentClashMode() string {
 	srv.clashMu.RLock()
 	defer srv.clashMu.RUnlock()
@@ -1834,6 +1949,17 @@ func (srv *Server) rememberClashURL(base string) {
 }
 
 func (srv *Server) setSystemProxy(ctx context.Context, enabled bool) error {
+	cfg := srv.currentConfig()
+	command := strings.TrimSpace(cfg.ClashSystemProxyOffCommand)
+	title := "关闭 Clash Verge 系统代理"
+	if enabled {
+		command = strings.TrimSpace(cfg.ClashSystemProxyOnCommand)
+		title = "开启 Clash Verge 系统代理"
+	}
+	if command != "" {
+		return srv.runConfiguredActionSync(ctx, title, command, 8*time.Second)
+	}
+
 	var failures []string
 	if err := srv.setGSettingsProxy(ctx, enabled); err != nil {
 		failures = append(failures, "gsettings: "+err.Error())
@@ -2052,6 +2178,39 @@ func (srv *Server) runConfiguredAction(title, command string, detach bool) {
 		return
 	}
 	srv.runCommandToSession(session, cmd)
+}
+
+func (srv *Server) runConfiguredActionSync(ctx context.Context, title, command string, timeout time.Duration) error {
+	session, _ := srv.sessions.Get("downloads")
+	if session != nil {
+		session.Append("[" + title + "] " + command)
+	}
+	argv, err := parseCommandLine(command)
+	if err != nil {
+		if session != nil {
+			session.Append("[error] " + err.Error())
+		}
+		return err
+	}
+	if len(argv) == 0 {
+		err := errors.New("empty command")
+		if session != nil {
+			session.Append("[error] " + err.Error())
+		}
+		return err
+	}
+	out, err := runCommandTimeout(ctx, timeout, argv[0], argv[1:]...)
+	if session != nil {
+		if strings.TrimSpace(out) != "" {
+			session.Append(out)
+		}
+		if err != nil {
+			session.Append("[error] " + err.Error())
+		} else {
+			session.Append("[ok] command completed")
+		}
+	}
+	return err
 }
 
 func (srv *Server) runStreamingCommand(session *Session, cwd, name string, args ...string) {

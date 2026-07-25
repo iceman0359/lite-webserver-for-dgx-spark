@@ -455,7 +455,7 @@
 
     .path-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-columns: minmax(170px, .45fr) minmax(0, 1fr) auto auto;
       gap: 10px;
       align-items: center;
     }
@@ -1239,6 +1239,10 @@
             </div>
             <div class="panel-body">
               <div class="path-row">
+                <select class="input" id="managedRootSelect" aria-label="受管根目录">
+                  <option value="/home/simonsyoyo/Comfyui/comfy_container_data">data 根目录</option>
+                  <option value="/home/simonsyoyo/Comfyui/ComfyUI/models">models 根目录</option>
+                </select>
                 <input class="input" id="pathInput" value="/home/simonsyoyo/Comfyui/comfy_container_data" aria-label="目录路径">
                 <button class="btn primary" id="visitPath" type="button">访问目录</button>
                 <button class="btn" id="parentPath" type="button">上一级</button>
@@ -1311,21 +1315,21 @@
             <div class="panel-head">
               <div class="panel-title">
                 <strong>Clash Verge 代理</strong>
-                <span>系统代理开关与 Clash/Mihomo 模式控制</span>
+                <span>Clash Verge v2.5.2 内部开关与模式</span>
               </div>
-              <span class="chip">本机 <strong>127.0.0.1</strong></span>
+              <span class="chip">Verge <strong>2.5.2</strong></span>
             </div>
             <div class="panel-body">
               <div class="proxy-grid">
                 <div class="proxy-state">
-                  <strong id="clashProxyStatus">代理已关闭</strong>
+                  <strong id="clashProxyStatus">Verge 系统代理已关闭</strong>
                   <span id="clashModeStatus">Clash Verge：未检测；接口：未检测；当前模式：规则</span>
                 </div>
                 <div class="proxy-buttons">
                   <button class="btn" id="detectClashApi" type="button">检测接口</button>
                   <button class="btn" id="startClashVerge" type="button">启动 Clash Verge</button>
                   <button class="btn warn" id="stopClashVerge" type="button">停止 Clash Verge</button>
-                  <button class="btn primary" id="toggleClashProxy" type="button">开启系统代理</button>
+                  <button class="btn primary" id="toggleClashProxy" type="button">开启 Verge 系统代理</button>
                 </div>
               </div>
               <div style="margin-top: 14px;">
@@ -1344,7 +1348,7 @@
             <div class="panel-head">
               <div class="panel-title">
                 <strong id="terminal-title">命令行</strong>
-                <span id="terminalCount">普通 0/4，固定输出 2 个</span>
+                <span id="terminalCount">普通 0/4，容器日志常驻 1 个</span>
               </div>
               <div class="terminal-actions">
                 <button class="btn warn" id="enterDockerBash" type="button">进入 Docker bash</button>
@@ -1392,6 +1396,10 @@
                   <input class="input" id="bindPort" value="8848">
                 </div>
                 <div class="field">
+                  <label for="settingsFilePath">设置保存文件</label>
+                  <input class="input" id="settingsFilePath" value="config.json" readonly>
+                </div>
+                <div class="field">
                   <label for="containerName">容器名</label>
                   <input class="input" id="containerName" value="comfyui">
                 </div>
@@ -1430,6 +1438,26 @@
                 <div class="field wide">
                   <label for="clashVergeConfigPath">Clash Verge 配置文件</label>
                   <input class="input" id="clashVergeConfigPath" value="~/.config/io.github.clash-verge-rev.clash-verge-rev/verge.yaml">
+                </div>
+                <div class="field">
+                  <label for="clashSystemProxyOnCommand">Verge 系统代理开启命令</label>
+                  <input class="input" id="clashSystemProxyOnCommand" value="">
+                </div>
+                <div class="field">
+                  <label for="clashSystemProxyOffCommand">Verge 系统代理关闭命令</label>
+                  <input class="input" id="clashSystemProxyOffCommand" value="">
+                </div>
+                <div class="field">
+                  <label for="clashRuleModeCommand">Verge 规则模式命令</label>
+                  <input class="input" id="clashRuleModeCommand" value="">
+                </div>
+                <div class="field">
+                  <label for="clashGlobalModeCommand">Verge 全局模式命令</label>
+                  <input class="input" id="clashGlobalModeCommand" value="">
+                </div>
+                <div class="field">
+                  <label for="clashDirectModeCommand">Verge 直连模式命令</label>
+                  <input class="input" id="clashDirectModeCommand" value="">
                 </div>
                 <div class="field">
                   <label for="clashStartCommand">Clash Verge 启动命令</label>
@@ -1475,7 +1503,9 @@ Esc 取消</textarea>
     const APP_ROOT = "/home/simonsyoyo/Comfyui";
     const DATA_ROOT = "/home/simonsyoyo/Comfyui/comfy_container_data";
     const MODELS_ROOT = "/home/simonsyoyo/Comfyui/ComfyUI/models";
-    const MAX_BROWSER_SESSION_CHARS = 256 * 1024;
+    const MAX_BROWSER_SESSION_CHARS = 96 * 1024;
+    const MAX_BROWSER_SESSION_CHUNK_CHARS = 4096;
+    const SETTINGS_STORAGE_KEY = "comfyui-manager-lite-settings";
 
     const pageMeta = {
       controller: ["控制器", "控制器 / 容器状态"],
@@ -1503,21 +1533,9 @@ Esc 取消</textarea>
     let downloadItems = [];
 
     let status = "running";
-    let activeTerminalId = "downloads";
+    let activeTerminalId = "logs";
     let terminalSeq = 0;
     let sessions = [
-      {
-        id: "downloads",
-        title: "下载器输出",
-        cwd: "/home/simonsyoyo/Comfyui/ComfyUI/models/checkpoints",
-        state: "fixed",
-        closable: false,
-        kind: "fixed",
-        output: [
-          "[downloader] fixed output session.",
-          "[downloader] 下载、更新和代理切换日志会输出在这里。"
-        ].join("\n")
-      },
       {
         id: "logs",
         title: "容器日志",
@@ -1547,6 +1565,7 @@ Esc 取消</textarea>
     const toast = document.getElementById("toast");
     let apiAvailable = false;
     const sessionStreams = new Map();
+    let terminalRenderPending = false;
 
     async function apiFetch(path, options = {}) {
       const init = { ...options };
@@ -1574,25 +1593,58 @@ Esc 取消</textarea>
         showToast("已连接本机后端。");
       } catch {
         apiAvailable = false;
+        loadBrowserSettings();
       }
     }
 
     async function loadSettings() {
       if (!apiAvailable) return;
       const cfg = await apiFetch("/api/config");
+      applySettings(cfg);
+    }
+
+    function applySettings(cfg = {}) {
+      document.getElementById("settingsFilePath").value = cfg.configPath || "config.json";
       document.getElementById("bindHost").value = cfg.bindHost || "127.0.0.1";
       document.getElementById("bindPort").value = cfg.port || 8848;
       document.getElementById("containerName").value = cfg.containerName || "comfyui";
       document.getElementById("modelsPath").value = cfg.modelsPath || MODELS_ROOT;
       document.getElementById("dataRootPath").value = cfg.dataRoot || DATA_ROOT;
+      document.getElementById("outputPath").value = cfg.outputPath || `${DATA_ROOT}/output`;
+      document.getElementById("customNodesPath").value = cfg.customNodesPath || `${DATA_ROOT}/custom_nodes`;
+      document.getElementById("inputPath").value = cfg.inputPath || `${DATA_ROOT}/input`;
+      document.getElementById("userPath").value = cfg.userPath || `${DATA_ROOT}/user`;
       document.getElementById("clashControllerUrl").value = cfg.clashControllerUrl || "http://127.0.0.1:9090";
       document.getElementById("clashSecret").value = cfg.clashSecret || "";
       document.getElementById("clashVergeConfigPath").value = cfg.clashVergeConfigPath || "~/.config/io.github.clash-verge-rev.clash-verge-rev/verge.yaml";
+      document.getElementById("clashSystemProxyOnCommand").value = cfg.clashSystemProxyOnCommand || "";
+      document.getElementById("clashSystemProxyOffCommand").value = cfg.clashSystemProxyOffCommand || "";
+      document.getElementById("clashRuleModeCommand").value = cfg.clashRuleModeCommand || "";
+      document.getElementById("clashGlobalModeCommand").value = cfg.clashGlobalModeCommand || "";
+      document.getElementById("clashDirectModeCommand").value = cfg.clashDirectModeCommand || "";
       document.getElementById("clashStartCommand").value = cfg.clashStartCommand || "clash-verge";
       document.getElementById("clashStopCommand").value = cfg.clashStopCommand || "pkill -TERM -f 'clash-verge|Clash Verge'";
       if (Array.isArray(cfg.controlButtons) && cfg.controlButtons.length) {
         controlButtons = cfg.controlButtons.slice(0, 12);
         document.getElementById("controlButtonsInput").value = controlButtons.join("\n");
+      }
+    }
+
+    function loadBrowserSettings() {
+      try {
+        const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+        if (!raw) return false;
+        applySettings(JSON.parse(raw));
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    function saveBrowserSettings(settings) {
+      try {
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ ...settings, configPath: "config.json" }));
+      } catch {
       }
     }
 
@@ -1610,10 +1662,19 @@ Esc 取消</textarea>
         dataRoot: DATA_ROOT,
         containerDataRoot: "/opt/ComfyUI",
         modelsPath: MODELS_ROOT,
+        outputPath: document.getElementById("outputPath").value.trim() || `${DATA_ROOT}/output`,
+        customNodesPath: document.getElementById("customNodesPath").value.trim() || `${DATA_ROOT}/custom_nodes`,
+        inputPath: document.getElementById("inputPath").value.trim() || `${DATA_ROOT}/input`,
+        userPath: document.getElementById("userPath").value.trim() || `${DATA_ROOT}/user`,
         downloadDirs: [...document.getElementById("downloadDirPreset").options].map(option => option.value),
         clashControllerUrl: document.getElementById("clashControllerUrl").value.trim() || "http://127.0.0.1:9090",
         clashSecret: document.getElementById("clashSecret").value.trim(),
         clashVergeConfigPath: document.getElementById("clashVergeConfigPath").value.trim() || "~/.config/io.github.clash-verge-rev.clash-verge-rev/verge.yaml",
+        clashSystemProxyOnCommand: document.getElementById("clashSystemProxyOnCommand").value.trim(),
+        clashSystemProxyOffCommand: document.getElementById("clashSystemProxyOffCommand").value.trim(),
+        clashRuleModeCommand: document.getElementById("clashRuleModeCommand").value.trim(),
+        clashGlobalModeCommand: document.getElementById("clashGlobalModeCommand").value.trim(),
+        clashDirectModeCommand: document.getElementById("clashDirectModeCommand").value.trim(),
         clashStartCommand: document.getElementById("clashStartCommand").value.trim() || "clash-verge",
         clashStopCommand: document.getElementById("clashStopCommand").value.trim() || "pkill -TERM -f 'clash-verge|Clash Verge'",
         httpProxy: "http://127.0.0.1:7890",
@@ -1655,18 +1716,73 @@ Esc 取消</textarea>
         .replaceAll('"', "&quot;");
     }
 
+    function initSessionBuffer(session) {
+      if (!session) return null;
+      if (Array.isArray(session.chunks)) return session;
+      const text = String(session.output || "");
+      session.chunks = [];
+      session.outputSize = 0;
+      session.output = "";
+      if (text) setSessionOutput(session, text);
+      return session;
+    }
+
+    function trimSessionBuffer(session) {
+      while (session.outputSize > MAX_BROWSER_SESSION_CHARS && session.chunks.length) {
+        const overflow = session.outputSize - MAX_BROWSER_SESSION_CHARS;
+        const first = session.chunks[0];
+        if (first.length <= overflow) {
+          session.outputSize -= first.length;
+          session.chunks.shift();
+        } else {
+          session.chunks[0] = first.slice(overflow);
+          session.outputSize -= overflow;
+        }
+      }
+    }
+
+    function setSessionOutput(session, text) {
+      initSessionBuffer(session);
+      session.chunks.length = 0;
+      session.outputSize = 0;
+      const tail = String(text || "").slice(-MAX_BROWSER_SESSION_CHARS);
+      for (let i = 0; i < tail.length; i += MAX_BROWSER_SESSION_CHUNK_CHARS) {
+        const part = tail.slice(i, i + MAX_BROWSER_SESSION_CHUNK_CHARS);
+        session.chunks.push(part);
+        session.outputSize += part.length;
+      }
+    }
+
+    function getSessionOutput(session) {
+      initSessionBuffer(session);
+      return session.chunks.join("");
+    }
+
     function appendSessionOutput(session, chunk) {
       if (!session || !chunk) return;
+      initSessionBuffer(session);
       let text = String(chunk);
       const shouldClear = /\x0c|\x1bc|\x1b\[2J|\x1b\[H/.test(text);
       if (shouldClear) {
-        session.output = "";
+        setSessionOutput(session, "");
         text = text.replace(/\x0c|\x1bc|\x1b\[[0-9;?]*[A-Za-z]/g, "");
       }
-      session.output += text;
-      if (session.output.length > MAX_BROWSER_SESSION_CHARS) {
-        session.output = session.output.slice(-MAX_BROWSER_SESSION_CHARS);
+      if (!text) return;
+      for (let i = 0; i < text.length; i += MAX_BROWSER_SESSION_CHUNK_CHARS) {
+        const part = text.slice(i, i + MAX_BROWSER_SESSION_CHUNK_CHARS);
+        session.chunks.push(part);
+        session.outputSize += part.length;
       }
+      trimSessionBuffer(session);
+    }
+
+    function scheduleTerminalRender() {
+      if (terminalRenderPending) return;
+      terminalRenderPending = true;
+      requestAnimationFrame(() => {
+        terminalRenderPending = false;
+        renderTerminal();
+      });
     }
 
     function ansiToHtml(input) {
@@ -1758,6 +1874,17 @@ Esc 取消</textarea>
       return clean.slice(0, clean.lastIndexOf("/")) || cleanPath(root.path);
     }
 
+    function renderManagedRootSelect(activePath = getCurrentPath()) {
+      const select = document.getElementById("managedRootSelect");
+      select.innerHTML = managedRoots.map(root => {
+        const label = root.name === "models" ? "models 根目录" : "data 根目录";
+        return `<option value="${escapeHtml(root.path)}">${escapeHtml(label)}</option>`;
+      }).join("");
+      const clean = cleanPath(activePath);
+      const selected = managedRoots.find(root => clean === cleanPath(root.path) || clean.startsWith(`${cleanPath(root.path)}/`));
+      if (selected) select.value = selected.path;
+    }
+
     function dockerShellQuote(path) {
       return `'${String(path).replaceAll("'", "'\\''")}'`;
     }
@@ -1784,7 +1911,7 @@ Esc 取消</textarea>
       const session = sessions.find(item => item.id === id);
       if (!session) return;
       appendSessionOutput(session, `\n${lines}`);
-      if (activeTerminalId === id) renderTerminal();
+      if (activeTerminalId === id) scheduleTerminalRender();
     }
 
     function ensureLogsSession() {
@@ -1843,6 +1970,7 @@ Esc 取消</textarea>
 
     function updateStorage(data) {
       if (Array.isArray(data.roots)) managedRoots = data.roots;
+      renderManagedRootSelect(data.path);
       const free = Number(data.freeBytes || 0);
       const total = Number(data.totalBytes || 0);
       const used = total > 0 ? Math.max(0, Math.min(100, ((total - free) / total) * 100)) : 0;
@@ -1931,27 +2059,39 @@ Esc 取消</textarea>
     function terminalLimitText() {
       const userCount = sessions.filter(item => item.kind !== "fixed").length;
       const fixedCount = sessions.length - userCount;
-      document.getElementById("terminalCount").textContent = `普通 ${userCount}/4，固定输出 ${fixedCount} 个`;
+      document.getElementById("terminalCount").textContent = `普通 ${userCount}/4，容器日志常驻 ${fixedCount} 个`;
       document.getElementById("newTerminal").disabled = userCount >= 4;
       document.getElementById("enterDockerBash").disabled = userCount >= 4;
     }
 
     async function refreshSessions() {
       if (!apiAvailable) return;
-      const remote = await apiFetch("/api/terminal/sessions");
+      const remote = (await apiFetch("/api/terminal/sessions")).filter(item => item.id !== "downloads");
       const old = new Map(sessions.map(item => [item.id, item]));
-      sessions = remote.map(item => ({
-        id: item.id,
-        title: item.title,
-        cwd: item.cwd,
-        state: item.running ? "running" : (item.fixed ? "fixed" : "idle"),
-        closable: item.closable,
-        kind: item.fixed ? "fixed" : "user",
-        output: old.get(item.id)?.output || ""
-      }));
+      sessions = remote.map(item => {
+        const previous = old.get(item.id);
+        return {
+          id: item.id,
+          title: item.title,
+          cwd: item.cwd,
+          state: item.running ? "running" : (item.fixed ? "fixed" : "idle"),
+          closable: item.closable,
+          kind: item.fixed ? "fixed" : "user",
+          chunks: previous?.chunks || [],
+          outputSize: previous?.outputSize || 0,
+          output: previous?.output || ""
+        };
+      });
+      sessions.forEach(initSessionBuffer);
+      for (const id of [...sessionStreams.keys()]) {
+        if (!sessions.some(item => item.id === id)) {
+          sessionStreams.get(id)?.close();
+          sessionStreams.delete(id);
+        }
+      }
       sessions.forEach(item => connectSessionStream(item.id));
       if (!sessions.some(item => item.id === activeTerminalId)) {
-        activeTerminalId = sessions[0]?.id || "";
+        activeTerminalId = sessions.some(item => item.id === "logs") ? "logs" : (sessions[0]?.id || "");
       }
       renderTerminal();
     }
@@ -1964,7 +2104,7 @@ Esc 取消</textarea>
         const session = sessions.find(item => item.id === id);
         if (!session) return;
         appendSessionOutput(session, event.data);
-        if (activeTerminalId === id) renderTerminal();
+        if (activeTerminalId === id) scheduleTerminalRender();
       };
       source.onerror = () => {
         source.close();
@@ -1974,20 +2114,26 @@ Esc 取消</textarea>
 
     function renderControlButtons() {
       const target = document.getElementById("terminalControls");
+      const active = sessions.find(item => item.id === activeTerminalId);
+      const writable = !!active && active.kind !== "fixed";
       target.innerHTML = controlButtons.map(label => `
-        <button class="control-key" data-control="${escapeHtml(label)}" type="button">${escapeHtml(label)}</button>
+        <button class="control-key" data-control="${escapeHtml(label)}" type="button" ${writable ? "" : "disabled"}>${escapeHtml(label)}</button>
       `).join("");
 
       target.querySelectorAll("[data-control]").forEach(btn => {
         btn.addEventListener("click", async () => {
           const active = sessions.find(item => item.id === activeTerminalId);
           if (!active) return;
+          if (active.kind === "fixed") {
+            showToast("当前是常驻输出窗口，不能发送控制键。");
+            return;
+          }
           const control = btn.dataset.control;
           if (apiAvailable) {
             try {
               await apiFetch("/api/terminal/control", { method: "POST", body: JSON.stringify({ id: active.id, control }) });
               if (control.toUpperCase().startsWith("CTRL+L")) {
-                active.output = "";
+                setSessionOutput(active, "");
                 renderTerminal();
               }
             } catch (error) {
@@ -1996,7 +2142,7 @@ Esc 取消</textarea>
             return;
           }
           if (control.startsWith("Ctrl+L")) {
-            active.output = "";
+            setSessionOutput(active, "");
           } else {
             appendSessionOutput(active, `\n[control] ${control}`);
           }
@@ -2043,9 +2189,15 @@ Esc 取消</textarea>
       if (!active) return;
       document.getElementById("activeTermTitle").textContent = `${active.title} / ${active.cwd}`;
       document.getElementById("activeTermState").textContent = active.state;
-      document.getElementById("promptPath").textContent = `${active.cwd} $`;
+      const writable = active.kind !== "fixed";
+      const input = document.getElementById("terminalCommand");
+      const send = document.getElementById("sendCommand");
+      document.getElementById("promptPath").textContent = writable ? `${active.cwd} $` : "只读输出";
+      input.disabled = !writable;
+      send.disabled = !writable;
+      input.placeholder = writable ? "输入命令后按 Enter" : "容器日志窗口不能输入命令";
       const output = document.getElementById("terminalOutput");
-      output.innerHTML = ansiToHtml(active.output);
+      output.innerHTML = ansiToHtml(getSessionOutput(active));
       output.scrollTop = output.scrollHeight;
     }
 
@@ -2064,8 +2216,8 @@ Esc 取消</textarea>
         }
         return;
       }
-      if (session.state === "running" || !session.closable) {
-        showToast("关闭失败：该命令行仍在运行任务，已保留会话，没有强行关闭。");
+      if (!session.closable) {
+        showToast("关闭失败：常驻日志窗口不能关闭。");
         return;
       }
       sessions = sessions.filter(item => item.id !== id);
@@ -2129,7 +2281,7 @@ Esc 取消</textarea>
         title: "Docker bash",
         cwd: "/opt/ComfyUI",
         state: "running",
-        closable: false,
+        closable: true,
         kind: "user",
         output: [
           "$ docker exec -it comfyui bash",
@@ -2145,12 +2297,19 @@ Esc 取消</textarea>
     async function sendTerminalCommand() {
       const active = sessions.find(item => item.id === activeTerminalId);
       const input = document.getElementById("terminalCommand");
-      const command = input.value.trim();
+      const command = input.value;
       if (!active || !command) return;
+      if (active.kind === "fixed") {
+        showToast("当前是常驻输出窗口，请新建命令行后再输入。");
+        return;
+      }
+      if (!command.trim()) return;
       if (apiAvailable) {
         try {
-          await apiFetch("/api/terminal/input", { method: "POST", body: JSON.stringify({ id: active.id, data: command }) });
+          const data = await apiFetch("/api/terminal/input", { method: "POST", body: JSON.stringify({ id: active.id, data: command }) });
+          if (data?.cwd) active.cwd = data.cwd;
           input.value = "";
+          renderTerminal();
         } catch (error) {
           showToast(error.message);
         }
@@ -2206,22 +2365,6 @@ Esc 取消</textarea>
       renderDownloadPreview();
     }
 
-    function ensureDownloadSession() {
-      let downloads = sessions.find(item => item.id === "downloads");
-      if (downloads) return downloads;
-      downloads = {
-        id: "downloads",
-        title: "下载器输出",
-        cwd: getDownloadCommand().dir,
-        state: "fixed",
-        closable: false,
-        kind: "fixed",
-        output: "[downloader] fixed output session."
-      };
-      sessions.unshift(downloads);
-      return downloads;
-    }
-
     function renderDownloadList() {
       const target = document.getElementById("downloadList");
       if (!downloadItems.length) {
@@ -2269,16 +2412,6 @@ Esc 取消</textarea>
       };
       downloadItems.unshift(item);
       renderDownloadList();
-
-      const session = ensureDownloadSession();
-      if (session) {
-        session.cwd = data.dir;
-        appendSessionOutput(session, `\n[${stamp()}] 下载任务 #${item.id}\n$ ${data.command}`);
-      } else {
-        showToast("任务已加入下载队列；命令行已满，暂未创建下载输出会话。");
-        return;
-      }
-      renderTerminal();
       showToast(data.method === "git pull" ? "更新任务已加入队列。" : "下载任务已加入队列。");
     }
 
@@ -2303,6 +2436,11 @@ Esc 取消</textarea>
         controllerUrl: document.getElementById("clashControllerUrl").value.trim().replace(/\/+$/, "") || "http://127.0.0.1:9090",
         secret: document.getElementById("clashSecret").value.trim(),
         vergeConfigPath: document.getElementById("clashVergeConfigPath").value.trim(),
+        systemProxyOnCommand: document.getElementById("clashSystemProxyOnCommand").value.trim(),
+        systemProxyOffCommand: document.getElementById("clashSystemProxyOffCommand").value.trim(),
+        ruleModeCommand: document.getElementById("clashRuleModeCommand").value.trim(),
+        globalModeCommand: document.getElementById("clashGlobalModeCommand").value.trim(),
+        directModeCommand: document.getElementById("clashDirectModeCommand").value.trim(),
         startCommand: document.getElementById("clashStartCommand").value.trim() || "clash-verge",
         stopCommand: document.getElementById("clashStopCommand").value.trim() || "pkill -TERM -f 'clash-verge|Clash Verge'"
       };
@@ -2325,9 +2463,17 @@ Esc 取消</textarea>
     }
 
     function appendDownloaderOutput(lines) {
-      const session = ensureDownloadSession();
-      appendSessionOutput(session, `\n${lines}`);
-      if (activeTerminalId === session.id) renderTerminal();
+      const text = String(lines || "").split("\n").filter(Boolean).slice(-1)[0] || "动作已记录";
+      downloadSeq += 1;
+      downloadItems.unshift({
+        id: downloadSeq,
+        method: "系统动作",
+        dir: "",
+        url: "",
+        command: text,
+        status: "已记录"
+      });
+      renderDownloadList();
     }
 
     function renderClashControls() {
@@ -2589,6 +2735,20 @@ Esc 取消</textarea>
       createTerminal(path);
     });
 
+    document.getElementById("managedRootSelect").addEventListener("change", async event => {
+      document.getElementById("pathInput").value = event.target.value;
+      if (apiAvailable) {
+        try {
+          await loadFiles(event.target.value);
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      currentFiles = [...baseFiles];
+      renderFiles();
+    });
+
     document.getElementById("newTerminal").addEventListener("click", () => createTerminal());
     document.getElementById("enterDockerBash").addEventListener("click", enterDockerBash);
     document.getElementById("sendCommand").addEventListener("click", sendTerminalCommand);
@@ -2658,20 +2818,24 @@ Esc 取消</textarea>
       if (apiAvailable) {
         try {
           await apiFetch("/api/config", { method: "POST", body: JSON.stringify(settings) });
+          saveBrowserSettings(settings);
           await loadSettings();
-          showToast("设置已保存。");
+          showToast("设置已写入 config.json。");
         } catch (error) {
           showToast(error.message);
           return;
         }
       } else {
-        showToast("命令行控制按钮已刷新。");
+        saveBrowserSettings(settings);
+        showToast("设置已先保存在浏览器本地。");
       }
       renderControlButtons();
       renderClashControls();
       renderDownloadPreview();
     });
 
+    loadBrowserSettings();
+    renderManagedRootSelect();
     renderFiles();
     renderDownloadPreview();
     renderDownloadList();
