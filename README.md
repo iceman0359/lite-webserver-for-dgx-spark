@@ -1,4 +1,4 @@
-# ComfyUI Manager Lite
+# lite-webserver-for-dgx-spark
 
 Lightweight local-only backend for an aarch64 Ubuntu ComfyUI container manager.
 
