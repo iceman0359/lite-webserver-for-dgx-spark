@@ -1721,6 +1721,7 @@ Esc 取消</textarea>
     let terminalRenderPending = false;
     let vllmContainerStatus = "stopped";
     let vllmServiceStatus = "stopped";
+    let vllmServiceStartPending = false;
 
     async function apiFetch(path, options = {}) {
       const init = { ...options };
@@ -1777,6 +1778,9 @@ Esc 取消</textarea>
 
     function updateVllmStatus(nextContainerStatus, nextServiceStatus = vllmServiceStatus) {
       vllmContainerStatus = nextContainerStatus;
+      if (vllmServiceStartPending && nextContainerStatus === "running" && nextServiceStatus === "stopped") {
+        nextServiceStatus = "starting";
+      }
       vllmServiceStatus = nextServiceStatus;
       const led = document.getElementById("vllmStatusLed");
       const containerTxt = document.getElementById("vllmContainerStatusText");
@@ -1791,8 +1795,8 @@ Esc 取消</textarea>
         containerMeta.textContent = "vllm-qwen35b 容器";
         serviceTxt.textContent = `服务：${vllmServiceLabel(vllmServiceStatus)}`;
         serviceMeta.textContent = "vLLM 推理服务";
-        startSvc.disabled = vllmServiceStatus === "running" || vllmServiceStatus === "starting";
-        stopSvc.disabled = !(vllmServiceStatus === "running" || vllmServiceStatus === "starting");
+        startSvc.disabled = vllmServiceStatus === "running" || vllmServiceStatus === "starting" || vllmServiceStartPending;
+        stopSvc.disabled = !(vllmServiceStatus === "running" || vllmServiceStatus === "starting" || vllmServiceStartPending);
       } else if (vllmContainerStatus === "stopped") {
         led.classList.add("stopped");
         containerTxt.textContent = "容器：已停止";
@@ -1816,6 +1820,12 @@ Esc 取消</textarea>
     async function refreshVllmStatus() {
       if (!apiAvailable) return;
       const data = await apiFetch("/api/container/vllm/status");
+      if (vllmServiceStartPending && data.status === "running" && data.serviceStatus === "stopped") {
+        data.serviceStatus = "starting";
+      }
+      if (data.serviceStatus === "running" || data.serviceStatus === "stopped" || data.serviceStatus === "missing") {
+        vllmServiceStartPending = false;
+      }
       updateVllmStatus(data.status, data.serviceStatus || "stopped");
     }
 
@@ -1863,12 +1873,17 @@ Esc 取消</textarea>
 
     document.getElementById("startVllmService").addEventListener("click", async () => {
       if (!apiAvailable) { showToast("需后端部署后生效"); return; }
+      if (vllmServiceStartPending || vllmServiceStatus === "running" || vllmServiceStatus === "starting") return;
+      vllmServiceStartPending = true;
+      updateVllmStatus(vllmContainerStatus, "starting");
       try {
         await apiFetch("/api/container/vllm/service/start", { method: "POST", body: "{}" });
         await refreshVllmStatus();
         showToast("vLLM 服务已启动。");
       } catch (error) {
         showToast(error.message);
+        vllmServiceStartPending = false;
+        updateVllmStatus(vllmContainerStatus, "stopped");
       }
     });
 
@@ -1876,6 +1891,7 @@ Esc 取消</textarea>
       if (!apiAvailable) { showToast("需后端部署后生效"); return; }
       try {
         await apiFetch("/api/container/vllm/service/stop", { method: "POST", body: "{}" });
+        vllmServiceStartPending = false;
         await refreshVllmStatus();
         showToast("vLLM 服务已停止。");
       } catch (error) {
