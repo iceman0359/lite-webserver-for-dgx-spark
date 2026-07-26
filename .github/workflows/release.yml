@@ -65,12 +65,14 @@ jobs:
           set -eux
           tag="${{ steps.meta.outputs.tag }}"
           cat > release-notes.md <<'EOF'
-          Lightweight local-only ComfyUI manager backend for DGX Spark / Ubuntu aarch64.
-          
-          Includes:
+          Lightweight local-only ComfyUI + vLLM manager backend for DGX Spark / Ubuntu aarch64.
+
+          Features:
+          - ComfyUI + vLLM container management
+          - Web terminal with PTY shell, Docker bash
+          - Machine temperature monitoring
+          - Configurable through web settings
           - Linux arm64 single binary
-          - default config example
-          - startup and user-level systemd scripts
           - SHA256 checksum
           EOF
           gh release create "$tag" \
