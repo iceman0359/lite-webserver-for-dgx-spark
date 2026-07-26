@@ -139,6 +139,9 @@ type Server struct {
 	clashAPIChecked bool
 	clashRunning bool
 	clashRunningChecked bool
+
+	vllmMu sync.RWMutex
+	vllmServiceStarting bool
 }
 
 type Event struct {
@@ -817,7 +820,12 @@ func (srv *Server) handleVllmContainerStatus(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": status})
+	serviceStatus, err := srv.vllmServiceStatus(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": status, "serviceStatus": serviceStatus})
 }
 
 func (srv *Server) handleVllmContainerStart(w http.ResponseWriter, r *http.Request) {
@@ -852,13 +860,27 @@ func (srv *Server) handleVllmServiceStart(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, errors.New("vllmServiceStartCommand not configured"))
 		return
 	}
-	out, err := runCommandTimeout(r.Context(), 5*time.Minute, "bash", "-c", cmd)
-	srv.appendLogs("vllm-logs", "[vllm] service start\n"+out)
+	containerStatus, err := srv.vllmContainerStatus(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "started", "output": out})
+	if containerStatus != "running" {
+		writeError(w, http.StatusConflict, errors.New("vllm container is not running"))
+		return
+	}
+	if status, err := srv.vllmServiceStatus(r.Context()); err == nil && (status == "running" || status == "starting") {
+		writeError(w, http.StatusConflict, errors.New("vllm service is already running"))
+		return
+	}
+	srv.setVllmServiceStarting(true)
+	if err := srv.runConfiguredActionDetached("vllm service start", cmd); err != nil {
+		srv.setVllmServiceStarting(false)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	go srv.watchVllmServiceStartup()
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "starting"})
 }
 
 func (srv *Server) handleVllmServiceStop(w http.ResponseWriter, r *http.Request) {
@@ -867,6 +889,7 @@ func (srv *Server) handleVllmServiceStop(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, errors.New("vllmServiceStopCommand not configured"))
 		return
 	}
+	srv.setVllmServiceStarting(false)
 	out, err := runCommand(r.Context(), "bash", "-c", cmd)
 	srv.appendLogs("vllm-logs", "[vllm] service stop\n"+out)
 	if err != nil {
@@ -890,6 +913,87 @@ func (srv *Server) vllmContainerStatus(ctx context.Context) (string, error) {
 		return "running", nil
 	default:
 		return "stopped", nil
+	}
+}
+
+func (srv *Server) vllmServiceStatus(ctx context.Context) (string, error) {
+	if srv.isVllmServiceStarting() {
+		return "starting", nil
+	}
+	return srv.probeVllmServiceStatus(ctx)
+}
+
+func (srv *Server) probeVllmServiceStatus(ctx context.Context) (string, error) {
+	containerStatus, err := srv.vllmContainerStatus(ctx)
+	if err != nil {
+		return "", err
+	}
+	if containerStatus != "running" {
+		return containerStatus, nil
+	}
+	name := srv.currentConfig().VllmContainerName
+	port := srv.vllmServicePort()
+	portHex := strings.ToUpper(fmt.Sprintf("%04X", port))
+	probe := fmt.Sprintf("awk 'NR>1 { split($2,a,\":\"); if (toupper(a[2]) == \"%s\" && $4 == \"0A\") found=1 } END { exit(found ? 0 : 1) }' /proc/net/tcp /proc/net/tcp6", portHex)
+	_, err = runCommandTimeout(ctx, 10*time.Second, "docker", "exec", name, "sh", "-lc", probe)
+	if err != nil {
+		return "stopped", nil
+	}
+	return "running", nil
+}
+
+func (srv *Server) vllmServicePort() int {
+	command := srv.currentConfig().VllmServiceStartCommand
+	port := 8000
+	fields := strings.Fields(command)
+	for _, field := range fields {
+		if strings.HasPrefix(field, "--port=") {
+			if next, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(field, "--port="))); err == nil && next > 0 {
+				return next
+			}
+		}
+	}
+	for i, field := range fields {
+		if field == "--port" && i+1 < len(fields) {
+			if next, err := strconv.Atoi(strings.Trim(fields[i+1], "'\"")); err == nil && next > 0 {
+				port = next
+			}
+			break
+		}
+	}
+	return port
+}
+
+func (srv *Server) setVllmServiceStarting(starting bool) {
+	srv.vllmMu.Lock()
+	srv.vllmServiceStarting = starting
+	srv.vllmMu.Unlock()
+}
+
+func (srv *Server) isVllmServiceStarting() bool {
+	srv.vllmMu.RLock()
+	defer srv.vllmMu.RUnlock()
+	return srv.vllmServiceStarting
+}
+
+func (srv *Server) watchVllmServiceStartup() {
+	defer srv.setVllmServiceStarting(false)
+	deadline := time.NewTimer(60 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		if !srv.isVllmServiceStarting() {
+			return
+		}
+		if status, err := srv.probeVllmServiceStatus(context.Background()); err == nil && status == "running" {
+			return
+		}
+		select {
+		case <-deadline.C:
+			return
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -2410,6 +2514,64 @@ func (srv *Server) runConfiguredActionSync(ctx context.Context, title, command s
 		}
 	}
 	return err
+}
+
+func (srv *Server) runConfiguredActionDetached(title, command string) error {
+	session, _ := srv.sessions.Get("vllm-logs")
+	if session != nil {
+		session.Append("[" + title + "] " + command)
+	}
+	cmd := exec.Command("bash", "-lc", command)
+	cmd.Dir = srv.currentConfig().AppRoot
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		if session != nil {
+			session.Append("[error] " + err.Error())
+		}
+		return err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		if session != nil {
+			session.Append("[error] " + err.Error())
+		}
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		if session != nil {
+			session.Append("[error] " + err.Error())
+		}
+		return err
+	}
+	if session != nil {
+		session.Append(fmt.Sprintf("[started] pid=%d", cmd.Process.Pid))
+		go pipeToSession(session, stdout)
+		go pipeToSession(session, stderr)
+	} else {
+		go io.Copy(io.Discard, stdout)
+		go io.Copy(io.Discard, stderr)
+	}
+	go func() {
+		err := cmd.Wait()
+		if session == nil {
+			if strings.Contains(strings.ToLower(title), "vllm service start") {
+				srv.setVllmServiceStarting(false)
+			}
+			return
+		}
+		if err != nil {
+			session.Append("[exit] " + err.Error())
+		} else {
+			session.Append("[exit] ok")
+		}
+		if strings.Contains(strings.ToLower(title), "vllm service start") {
+			srv.setVllmServiceStarting(false)
+		}
+	}()
+	return nil
 }
 
 func (srv *Server) runStreamingCommand(session *Session, cwd, name string, args ...string) {

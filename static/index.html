@@ -725,9 +725,12 @@
 
     .terminal-box {
       min-height: 430px;
+      min-width: 360px;
+      max-width: 100%;
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      resize: both;
       border-radius: var(--radius);
       border: 1px solid #20211f;
       background: #111311;
@@ -746,6 +749,18 @@
       color: rgba(255,255,255,.78);
       font-size: 12px;
       font-family: var(--mono);
+    }
+
+    .terminal-head-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .terminal-head-actions .btn {
+      min-height: 28px;
+      padding: 0 10px;
+      font-size: 12px;
     }
 
     .terminal-output {
@@ -1251,8 +1266,10 @@
                     <div class="status-main">
                       <span class="status-led stopped" id="vllmStatusLed"></span>
                       <div class="status-copy">
-                        <strong id="vllmStatusText">已停止</strong>
-                        <span id="vllmStatusMeta">vllm-qwen35b 容器</span>
+                        <strong id="vllmContainerStatusText">容器：已停止</strong>
+                        <span id="vllmContainerStatusMeta">vllm-qwen35b 容器</span>
+                        <strong id="vllmServiceStatusText">服务：已停止</strong>
+                        <span id="vllmServiceStatusMeta">vLLM 推理服务</span>
                       </div>
                     </div>
                     <button class="btn" id="refreshVllmStatus" type="button">刷新状态</button>
@@ -1465,7 +1482,10 @@
                 <div class="terminal-box">
                   <div class="terminal-head">
                     <span id="activeTermTitle">日志 / docker logs -f comfyui</span>
-                    <span id="activeTermState">running</span>
+                    <div class="terminal-head-actions">
+                      <span id="activeTermState">running</span>
+                      <button class="btn" id="clearTerminal" type="button">清空当前窗口</button>
+                    </div>
                   </div>
                   <pre class="terminal-output" id="terminalOutput"></pre>
                   <div class="terminal-input">
@@ -1659,6 +1679,8 @@ Esc 取消</textarea>
         state: "running",
         closable: false,
         kind: "fixed",
+        lastSeq: 0,
+        clearBeforeSeq: 0,
         output: [
           "[comfyui] Web shell ready.",
           "[docker] logs -f comfyui",
@@ -1672,6 +1694,8 @@ Esc 取消</textarea>
         state: "running",
         closable: false,
         kind: "fixed",
+        lastSeq: 0,
+        clearBeforeSeq: 0,
         output: [
           "[vllm] Web shell ready.",
           "[vllm] docker logs -f vllm-qwen35b",
@@ -1695,6 +1719,8 @@ Esc 取消</textarea>
     let apiAvailable = false;
     const sessionStreams = new Map();
     let terminalRenderPending = false;
+    let vllmContainerStatus = "stopped";
+    let vllmServiceStatus = "stopped";
 
     async function apiFetch(path, options = {}) {
       const init = { ...options };
@@ -1737,51 +1763,74 @@ Esc 取消</textarea>
     // Auto-refresh temps every 30s
     setInterval(fetchTemperatures, 30000);
     fetchTemperatures();
+    setInterval(() => {
+      if (apiAvailable) refreshVllmStatus().catch(() => {});
+    }, 15000);
 
-    // vLLM container state
-    let vllmStatus = "stopped";
+    // vLLM container / service state
+    function vllmServiceLabel(status) {
+      if (status === "running") return "推理服务运行中";
+      if (status === "starting") return "推理服务启动中";
+      if (status === "missing") return "未检测到服务容器";
+      return "推理服务已停止";
+    }
 
-    function updateVllmStatus(nextStatus) {
-      vllmStatus = nextStatus;
+    function updateVllmStatus(nextContainerStatus, nextServiceStatus = vllmServiceStatus) {
+      vllmContainerStatus = nextContainerStatus;
+      vllmServiceStatus = nextServiceStatus;
       const led = document.getElementById("vllmStatusLed");
-      const txt = document.getElementById("vllmStatusText");
-      const meta = document.getElementById("vllmStatusMeta");
+      const containerTxt = document.getElementById("vllmContainerStatusText");
+      const containerMeta = document.getElementById("vllmContainerStatusMeta");
+      const serviceTxt = document.getElementById("vllmServiceStatusText");
+      const serviceMeta = document.getElementById("vllmServiceStatusMeta");
       const startSvc = document.getElementById("startVllmService");
       const stopSvc = document.getElementById("stopVllmService");
       led.className = "status-led";
-      if (vllmStatus === "running") {
-        txt.textContent = "运行中";
-        meta.textContent = "vLLM 可通过 http://localhost:8000 访问";
-        startSvc.disabled = false;
-        stopSvc.disabled = false;
-      } else if (vllmStatus === "stopped") {
+      if (vllmContainerStatus === "running") {
+        containerTxt.textContent = "容器：运行中";
+        containerMeta.textContent = "vllm-qwen35b 容器";
+        serviceTxt.textContent = `服务：${vllmServiceLabel(vllmServiceStatus)}`;
+        serviceMeta.textContent = "vLLM 推理服务";
+        startSvc.disabled = vllmServiceStatus === "running" || vllmServiceStatus === "starting";
+        stopSvc.disabled = !(vllmServiceStatus === "running" || vllmServiceStatus === "starting");
+      } else if (vllmContainerStatus === "stopped") {
         led.classList.add("stopped");
-        txt.textContent = "已停止";
-        meta.textContent = "容器存在，但当前没有运行";
+        containerTxt.textContent = "容器：已停止";
+        containerMeta.textContent = "vllm-qwen35b 容器";
+        serviceTxt.textContent = "服务：已停止";
+        serviceMeta.textContent = "vLLM 推理服务";
         startSvc.disabled = true;
         stopSvc.disabled = true;
       } else {
         led.classList.add("missing");
-        txt.textContent = "未检测到";
-        meta.textContent = "没有检测到已准备好的 vllm-qwen35b 容器";
+        containerTxt.textContent = "容器：未检测到";
+        containerMeta.textContent = "没有检测到已准备好的 vllm-qwen35b 容器";
+        serviceTxt.textContent = "服务：未检测到";
+        serviceMeta.textContent = "vLLM 推理服务";
         startSvc.disabled = true;
         stopSvc.disabled = true;
       }
       document.getElementById("vllmStatusTime").textContent = stamp();
     }
 
+    async function refreshVllmStatus() {
+      if (!apiAvailable) return;
+      const data = await apiFetch("/api/container/vllm/status");
+      updateVllmStatus(data.status, data.serviceStatus || "stopped");
+    }
+
     document.getElementById("startVllmContainer").addEventListener("click", async () => {
       if (apiAvailable) {
         try {
           await apiFetch("/api/container/vllm/start", { method: "POST", body: "{}" });
-          updateVllmStatus("running");
+          await refreshVllmStatus();
           showToast("vllm-qwen35b 容器已唤醒。");
         } catch (error) {
           showToast(error.message);
         }
         return;
       }
-      updateVllmStatus("running");
+      updateVllmStatus("running", "stopped");
       showToast("已写入启动动作。");
     });
 
@@ -1789,22 +1838,21 @@ Esc 取消</textarea>
       if (apiAvailable) {
         try {
           await apiFetch("/api/container/vllm/stop", { method: "POST", body: "{}" });
-          updateVllmStatus("stopped");
+          await refreshVllmStatus();
           showToast("vllm-qwen35b 容器已停止。");
         } catch (error) {
           showToast(error.message);
         }
         return;
       }
-      updateVllmStatus("stopped");
+      updateVllmStatus("stopped", "stopped");
       showToast("已写入停止动作。");
     });
 
     document.getElementById("refreshVllmStatus").addEventListener("click", async () => {
       if (apiAvailable) {
         try {
-          const data = await apiFetch("/api/container/vllm/status");
-          updateVllmStatus(data.status);
+          await refreshVllmStatus();
         } catch (error) {
           showToast(error.message);
         }
@@ -1817,6 +1865,7 @@ Esc 取消</textarea>
       if (!apiAvailable) { showToast("需后端部署后生效"); return; }
       try {
         await apiFetch("/api/container/vllm/service/start", { method: "POST", body: "{}" });
+        await refreshVllmStatus();
         showToast("vLLM 服务已启动。");
       } catch (error) {
         showToast(error.message);
@@ -1827,6 +1876,7 @@ Esc 取消</textarea>
       if (!apiAvailable) { showToast("需后端部署后生效"); return; }
       try {
         await apiFetch("/api/container/vllm/service/stop", { method: "POST", body: "{}" });
+        await refreshVllmStatus();
         showToast("vLLM 服务已停止。");
       } catch (error) {
         showToast(error.message);
@@ -1840,6 +1890,7 @@ Esc 取消</textarea>
         await loadSettings();
         await Promise.allSettled([
           refreshContainerStatus(),
+          refreshVllmStatus(),
           loadFiles(getCurrentPath()),
           loadDownloadDirs(),
           refreshSessions(),
@@ -1863,12 +1914,15 @@ Esc 取消</textarea>
       document.getElementById("bindHost").value = cfg.bindHost || "127.0.0.1";
       document.getElementById("bindPort").value = cfg.port || 8848;
       document.getElementById("containerName").value = cfg.containerName || "comfyui";
+      document.getElementById("vllmContainerName").value = cfg.vllmContainerName || "vllm-qwen35b";
       document.getElementById("modelsPath").value = cfg.modelsPath || MODELS_ROOT;
       document.getElementById("dataRootPath").value = cfg.dataRoot || DATA_ROOT;
       document.getElementById("outputPath").value = cfg.outputPath || `${DATA_ROOT}/output`;
       document.getElementById("customNodesPath").value = cfg.customNodesPath || `${DATA_ROOT}/custom_nodes`;
       document.getElementById("inputPath").value = cfg.inputPath || `${DATA_ROOT}/input`;
       document.getElementById("userPath").value = cfg.userPath || `${DATA_ROOT}/user`;
+      document.getElementById("vllmServiceStartCommand").value = cfg.vllmServiceStartCommand || "";
+      document.getElementById("vllmServiceStopCommand").value = cfg.vllmServiceStopCommand || "docker exec vllm-qwen35b pkill -f 'vllm serve'";
       document.getElementById("clashControllerUrl").value = cfg.clashControllerUrl || "http://127.0.0.1:9090";
       document.getElementById("clashSecret").value = cfg.clashSecret || "";
       document.getElementById("clashVergeConfigPath").value = cfg.clashVergeConfigPath || "~/.config/io.github.clash-verge-rev.clash-verge-rev/verge.yaml";
@@ -1913,6 +1967,7 @@ Esc 取消</textarea>
         bindHost: document.getElementById("bindHost").value.trim() || "127.0.0.1",
         port: Number(document.getElementById("bindPort").value) || 8848,
         containerName: document.getElementById("containerName").value.trim() || "comfyui",
+        vllmContainerName: document.getElementById("vllmContainerName").value.trim() || "vllm-qwen35b",
         appRoot: APP_ROOT,
         dataRoot: DATA_ROOT,
         containerDataRoot: "/opt/ComfyUI",
@@ -1921,6 +1976,8 @@ Esc 取消</textarea>
         customNodesPath: document.getElementById("customNodesPath").value.trim() || `${DATA_ROOT}/custom_nodes`,
         inputPath: document.getElementById("inputPath").value.trim() || `${DATA_ROOT}/input`,
         userPath: document.getElementById("userPath").value.trim() || `${DATA_ROOT}/user`,
+        vllmServiceStartCommand: document.getElementById("vllmServiceStartCommand").value.trim(),
+        vllmServiceStopCommand: document.getElementById("vllmServiceStopCommand").value.trim() || "docker exec vllm-qwen35b pkill -f 'vllm serve'",
         downloadDirs: [...document.getElementById("downloadDirPreset").options].map(option => option.value),
         clashControllerUrl: document.getElementById("clashControllerUrl").value.trim() || "http://127.0.0.1:9090",
         clashSecret: document.getElementById("clashSecret").value.trim(),
@@ -2169,6 +2226,15 @@ Esc 取消</textarea>
       if (activeTerminalId === id) scheduleTerminalRender();
     }
 
+    function clearCurrentTerminal() {
+      const session = sessions.find(item => item.id === activeTerminalId);
+      if (!session) return;
+      session.clearBeforeSeq = Math.max(session.clearBeforeSeq || 0, session.lastSeq || 0);
+      setSessionOutput(session, "");
+      if (activeTerminalId === session.id) renderTerminal();
+      showToast("当前窗口已清空。");
+    }
+
     function ensureLogsSession() {
       let logs = sessions.find(item => item.id === "logs");
       if (!logs) {
@@ -2179,6 +2245,8 @@ Esc 取消</textarea>
           state: "running",
           closable: false,
           kind: "fixed",
+          lastSeq: 0,
+          clearBeforeSeq: 0,
           output: "[docker] logs -f comfyui"
         };
         sessions.unshift(logs);
@@ -2334,7 +2402,9 @@ Esc 取消</textarea>
           kind: item.fixed ? "fixed" : "user",
           chunks: previous?.chunks || [],
           outputSize: previous?.outputSize || 0,
-          output: previous?.output || ""
+          output: previous?.output || "",
+          lastSeq: previous?.lastSeq || 0,
+          clearBeforeSeq: previous?.clearBeforeSeq || 0
         };
       });
       sessions.forEach(initSessionBuffer);
@@ -2358,6 +2428,9 @@ Esc 取消</textarea>
       source.onmessage = event => {
         const session = sessions.find(item => item.id === id);
         if (!session) return;
+        const seq = Number(event.lastEventId || 0) || 0;
+        session.lastSeq = Math.max(session.lastSeq || 0, seq);
+        if (seq && seq <= (session.clearBeforeSeq || 0)) return;
         appendSessionOutput(session, event.data);
         if (activeTerminalId === id) scheduleTerminalRender();
       };
@@ -2506,6 +2579,8 @@ Esc 取消</textarea>
         state: "idle",
         closable: true,
         kind: "user",
+        lastSeq: 0,
+        clearBeforeSeq: 0,
         output: `$ cd ${cwd}\n${cwd} $`
       });
       activeTerminalId = id;
@@ -2538,6 +2613,8 @@ Esc 取消</textarea>
         state: "running",
         closable: true,
         kind: "user",
+        lastSeq: 0,
+        clearBeforeSeq: 0,
         output: ["$ docker exec -it vllm-qwen35b bash", "root@vllm-qwen35b:/workspace#"].join("\n")
       });
       activeTerminalId = id;
@@ -2571,6 +2648,8 @@ Esc 取消</textarea>
         state: "running",
         closable: true,
         kind: "user",
+        lastSeq: 0,
+        clearBeforeSeq: 0,
         output: [
           "$ docker exec -it comfyui bash",
           "root@comfyui:/opt/ComfyUI#"
@@ -3056,6 +3135,7 @@ Esc 取消</textarea>
     document.getElementById("enterDockerBash").addEventListener("click", enterDockerBash);
     document.getElementById("enterVllmDockerBash").addEventListener("click", enterVllmDockerBash);
     document.getElementById("sendCommand").addEventListener("click", sendTerminalCommand);
+    document.getElementById("clearTerminal").addEventListener("click", clearCurrentTerminal);
     document.getElementById("terminalCommand").addEventListener("keydown", event => {
       if (event.key === "Enter") sendTerminalCommand();
     });
@@ -3124,6 +3204,7 @@ Esc 取消</textarea>
           await apiFetch("/api/config", { method: "POST", body: JSON.stringify(settings) });
           saveBrowserSettings(settings);
           await loadSettings();
+          await Promise.allSettled([refreshContainerStatus(), refreshVllmStatus()]);
           showToast("设置已写入 config.json。");
         } catch (error) {
           showToast(error.message);
