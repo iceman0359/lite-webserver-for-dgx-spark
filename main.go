@@ -305,6 +305,9 @@ func normalizeConfig(cfg *Config) {
 	if strings.TrimSpace(cfg.ContainerName) == "" {
 		cfg.ContainerName = "comfyui"
 	}
+	if strings.TrimSpace(cfg.VllmContainerName) == "" {
+		cfg.VllmContainerName = "vllm-qwen35b"
+	}
 	if strings.TrimSpace(cfg.ContainerDataRoot) == "" {
 		cfg.ContainerDataRoot = defaultContainerRoot
 	}
@@ -332,6 +335,12 @@ func normalizeConfig(cfg *Config) {
 		cfg.SocksProxy = "socks5://127.0.0.1:7891"
 	}
 	cfg.ControlButtons = cleanControlButtons(cfg.ControlButtons)
+	if strings.TrimSpace(cfg.VllmServiceStartCommand) == "" {
+		cfg.VllmServiceStartCommand = defaultConfig().VllmServiceStartCommand
+	}
+	if strings.TrimSpace(cfg.VllmServiceStopCommand) == "" {
+		cfg.VllmServiceStopCommand = defaultConfig().VllmServiceStopCommand
+	}
 	cfg.DownloadDirs = filterManagedDownloadDirs(cfg.DownloadDirs)
 	if len(cfg.DownloadDirs) == 0 {
 		cfg.DownloadDirs = defaultConfig().DownloadDirs
@@ -434,7 +443,7 @@ func (s *Session) Append(data string) {
 		return
 	}
 	if len(data) > 8192 {
-		data = data[:8192] + "\n[output truncated]"
+		data = safeTruncate(data, 8192) + "\n[output truncated]"
 	}
 	ev := Event{Data: data, At: time.Now()}
 
@@ -454,6 +463,12 @@ func (s *Session) Append(data string) {
 	for len(s.events) > 0 && (s.byteCount > maxBytes || len(s.events) > maxEvents) {
 		s.byteCount -= len(s.events[0].Data)
 		s.events = s.events[1:]
+	}
+	// Compact backing array if capacity grew too large
+	if cap(s.events) > 2*len(s.events) && len(s.events) > 0 {
+		trimmed := make([]Event, len(s.events))
+		copy(trimmed, s.events)
+		s.events = trimmed
 	}
 	for ch := range s.subs {
 		select {
@@ -837,7 +852,7 @@ func (srv *Server) handleVllmServiceStart(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, errors.New("vllmServiceStartCommand not configured"))
 		return
 	}
-	out, err := runCommand(r.Context(), "bash", "-c", cmd)
+	out, err := runCommandTimeout(r.Context(), 5*time.Minute, "bash", "-c", cmd)
 	srv.appendLogs("vllm-logs", "[vllm] service start\n"+out)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
