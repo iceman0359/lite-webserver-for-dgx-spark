@@ -1207,6 +1207,109 @@
             </div>
           </div>
 
+          
+          <div style="margin-top: 24px;">
+            <div class="panel">
+              <div class="panel-head">
+                <div class="panel-title">
+                  <strong>机器温度</strong>
+                  <span>实时读取 /sys/class/thermal</span>
+                </div>
+                <button class="btn" id="refreshTemp" type="button" style="min-height: 32px; padding: 0 10px; font-size: 12px;">刷新</button>
+              </div>
+              <div class="panel-body">
+                <div class="health-grid" id="tempGrid">
+                  <div class="metric">
+                    <span>GPU</span>
+                    <strong id="tempGpu">-- C</strong>
+                  </div>
+                  <div class="metric">
+                    <span>CPU</span>
+                    <strong id="tempCpu">-- C</strong>
+                  </div>
+                  <div class="metric">
+                    <span>系统</span>
+                    <strong id="tempSys">-- C</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+<div style="margin-top: 24px;">
+            <div class="grid-2">
+              <div class="panel">
+                <div class="panel-head">
+                  <div class="panel-title">
+                    <strong>vLLM 容器控制</strong>
+                    <span>vllm-qwen35b 启动、停止和状态</span>
+                  </div>
+                  <span class="chip">上次刷新 <strong id="vllmStatusTime">刚刚</strong></span>
+                </div>
+                <div class="panel-body">
+                  <div class="status-box">
+                    <div class="status-main">
+                      <span class="status-led stopped" id="vllmStatusLed"></span>
+                      <div class="status-copy">
+                        <strong id="vllmStatusText">已停止</strong>
+                        <span id="vllmStatusMeta">vllm-qwen35b 容器</span>
+                      </div>
+                    </div>
+                    <button class="btn" id="refreshVllmStatus" type="button">刷新状态</button>
+                  </div>
+                  <div class="health-grid">
+                    <div class="metric">
+                      <span>容器名</span>
+                      <strong>vllm-qwen35b</strong>
+                    </div>
+                    <div class="metric">
+                      <span>网络模式</span>
+                      <strong>host</strong>
+                    </div>
+                    <div class="metric">
+                      <span>vLLM 端口</span>
+                      <strong>8000</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="panel">
+                <div class="panel-head">
+                  <div class="panel-title">
+                    <strong>vLLM 操作</strong>
+                    <span>仅控制已存在的 vllm-qwen35b</span>
+                  </div>
+                </div>
+                <div class="panel-body">
+                  <div class="action-row">
+                    <button class="action-btn" id="startVllmContainer" type="button">
+                      <span class="action-symbol">ON</span>
+                      <span class="action-copy"><strong>启动 / 唤醒</strong><span>docker start vllm-qwen35b</span></span>
+                    </button>
+                    <button class="action-btn danger" id="stopVllmContainer" type="button">
+                      <span class="action-symbol">X</span>
+                      <span class="action-copy"><strong>停止容器</strong><span>docker stop vllm-qwen35b</span></span>
+                    </button>
+                    <button class="action-btn" id="showVllmLogs" type="button">
+                      <span class="action-symbol">&gt;_</span>
+                      <span class="action-copy"><strong>vLLM 日志</strong><span>跳到命令行并输出日志</span></span>
+                    </button>
+                  </div>
+                  <div class="action-row" style="margin-top: 12px;">
+                    <button class="action-btn" id="startVllmService" type="button" disabled>
+                      <span class="action-symbol">GO</span>
+                      <span class="action-copy"><strong>vLLM 启动</strong><span>启动 vLLM 推理服务</span></span>
+                    </button>
+                    <button class="action-btn danger" id="stopVllmService" type="button" disabled>
+                      <span class="action-symbol">X</span>
+                      <span class="action-copy"><strong>vLLM 退出</strong><span>停止 vLLM 推理服务</span></span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </section>
 
         <section class="page" id="page-manager" aria-labelledby="manager-title">
@@ -1351,7 +1454,8 @@
                 <span id="terminalCount">普通 0/4，容器日志常驻 1 个</span>
               </div>
               <div class="terminal-actions">
-                <button class="btn warn" id="enterDockerBash" type="button">进入 Docker bash</button>
+                <button class="btn warn" id="enterDockerBash" type="button">ComfyUI Bash</button>
+              <button class="btn warn" id="enterVllmDockerBash" type="button">vLLM Bash</button>
                 <button class="btn primary" id="newTerminal" type="button">新建命令行</button>
               </div>
             </div>
@@ -1402,6 +1506,18 @@
                 <div class="field">
                   <label for="containerName">容器名</label>
                   <input class="input" id="containerName" value="comfyui">
+                </div>
+                <div class="field">
+                  <label for="vllmContainerName">vLLM 容器名</label>
+                  <input class="input" id="vllmContainerName" value="vllm-qwen35b">
+                </div>
+                <div class="field wide">
+                  <label for="vllmServiceStartCommand">vLLM 启动命令</label>
+                  <textarea class="input textarea" id="vllmServiceStartCommand" spellcheck="false" style="min-height: 140px;"></textarea>
+                </div>
+                <div class="field wide">
+                  <label for="vllmServiceStopCommand">vLLM 停止命令</label>
+                  <input class="input" id="vllmServiceStopCommand" value="docker exec vllm-qwen35b pkill -f 'vllm serve'">
                 </div>
                 <div class="field">
                   <label for="modelsPath">模型目录</label>
@@ -1548,6 +1664,19 @@ Esc 取消</textarea>
           "[docker] logs -f comfyui",
           "[ComfyUI] Listening on 0.0.0.0:8188"
         ].join("\n")
+      },
+      {
+        id: "vllm-logs",
+        title: "vLLM 日志",
+        cwd: APP_ROOT,
+        state: "running",
+        closable: false,
+        kind: "fixed",
+        output: [
+          "[vllm] Web shell ready.",
+          "[vllm] docker logs -f vllm-qwen35b",
+          "[vllm] Waiting for container..."
+        ].join("\n")
       }
     ];
     let clashProxyEnabled = false;
@@ -1577,6 +1706,132 @@ Esc 取消</textarea>
       if (!response.ok) throw new Error(data?.error || response.statusText);
       return data;
     }
+
+
+    // Temperature monitoring
+    async function fetchTemperatures() {
+      if (!apiAvailable) return;
+      try {
+        const data = await apiFetch("/api/system/temp");
+        const zones = data.zones || [];
+        const byName = {};
+        for (const z of zones) {
+          byName[z.name.toLowerCase()] = z.temp;
+        }
+        // Try to match common thermal zone names
+        const gpuTemp = byName["gpu"] ?? byName["nvidia"] ?? byName["gpu-therm"] ?? null;
+        const cpuTemp = byName["cpu"] ?? byName["cpu-therm"] ?? byName["x86_pkg_temp"] ?? byName["acpitz"] ?? null;
+        const sysTemp = byName["soc"] ?? byName["soc-therm"] ?? byName["mtktscpu"] ?? zones[0]?.temp ?? null;
+        document.getElementById("tempGpu").textContent = gpuTemp != null ? gpuTemp.toFixed(1) + " C" : "-- C";
+        document.getElementById("tempCpu").textContent = cpuTemp != null ? cpuTemp.toFixed(1) + " C" : "-- C";
+        document.getElementById("tempSys").textContent = sysTemp != null ? sysTemp.toFixed(1) + " C" : "-- C";
+      } catch (e) {
+        // silently fail - temps not critical
+      }
+    }
+
+    document.getElementById("refreshTemp").addEventListener("click", () => {
+      fetchTemperatures().then(() => showToast("温度已刷新。"));
+    });
+
+    // Auto-refresh temps every 30s
+    setInterval(fetchTemperatures, 30000);
+    fetchTemperatures();
+
+    // vLLM container state
+    let vllmStatus = "stopped";
+
+    function updateVllmStatus(nextStatus) {
+      vllmStatus = nextStatus;
+      const led = document.getElementById("vllmStatusLed");
+      const txt = document.getElementById("vllmStatusText");
+      const meta = document.getElementById("vllmStatusMeta");
+      const startSvc = document.getElementById("startVllmService");
+      const stopSvc = document.getElementById("stopVllmService");
+      led.className = "status-led";
+      if (vllmStatus === "running") {
+        txt.textContent = "运行中";
+        meta.textContent = "vLLM 可通过 http://localhost:8000 访问";
+        startSvc.disabled = false;
+        stopSvc.disabled = false;
+      } else if (vllmStatus === "stopped") {
+        led.classList.add("stopped");
+        txt.textContent = "已停止";
+        meta.textContent = "容器存在，但当前没有运行";
+        startSvc.disabled = true;
+        stopSvc.disabled = true;
+      } else {
+        led.classList.add("missing");
+        txt.textContent = "未检测到";
+        meta.textContent = "没有检测到已准备好的 vllm-qwen35b 容器";
+        startSvc.disabled = true;
+        stopSvc.disabled = true;
+      }
+      document.getElementById("vllmStatusTime").textContent = stamp();
+    }
+
+    document.getElementById("startVllmContainer").addEventListener("click", async () => {
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/container/vllm/start", { method: "POST", body: "{}" });
+          updateVllmStatus("running");
+          showToast("vllm-qwen35b 容器已唤醒。");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      updateVllmStatus("running");
+      showToast("已写入启动动作。");
+    });
+
+    document.getElementById("stopVllmContainer").addEventListener("click", async () => {
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/container/vllm/stop", { method: "POST", body: "{}" });
+          updateVllmStatus("stopped");
+          showToast("vllm-qwen35b 容器已停止。");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      updateVllmStatus("stopped");
+      showToast("已写入停止动作。");
+    });
+
+    document.getElementById("refreshVllmStatus").addEventListener("click", async () => {
+      if (apiAvailable) {
+        try {
+          const data = await apiFetch("/api/container/vllm/status");
+          updateVllmStatus(data.status);
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      showToast("需后端部署后生效");
+    });
+
+    document.getElementById("startVllmService").addEventListener("click", async () => {
+      if (!apiAvailable) { showToast("需后端部署后生效"); return; }
+      try {
+        await apiFetch("/api/container/vllm/service/start", { method: "POST", body: "{}" });
+        showToast("vLLM 服务已启动。");
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+
+    document.getElementById("stopVllmService").addEventListener("click", async () => {
+      if (!apiAvailable) { showToast("需后端部署后生效"); return; }
+      try {
+        await apiFetch("/api/container/vllm/service/stop", { method: "POST", body: "{}" });
+        showToast("vLLM 服务已停止。");
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
 
     async function detectBackend() {
       try {
@@ -2258,6 +2513,39 @@ Esc 取消</textarea>
       renderTerminal();
     }
 
+    async function enterVllmDockerBash() {
+      if (apiAvailable) {
+        try {
+          const data = await apiFetch("/api/terminal/vllm-docker-bash", { method: "POST", body: "{}" });
+          activeTerminalId = data.id;
+          await refreshSessions();
+          switchPage("terminal");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      if (sessions.filter(item => item.kind !== "fixed").length >= 4) {
+        showToast("最多只能同时打开 4 个命令行。");
+        return;
+      }
+      terminalSeq += 1;
+      const id = `vllm-bash-${terminalSeq}`;
+      sessions.push({
+        id,
+        title: "vLLM bash",
+        cwd: "/workspace",
+        state: "running",
+        closable: true,
+        kind: "user",
+        output: ["$ docker exec -it vllm-qwen35b bash", "root@vllm-qwen35b:/workspace#"].join("\n")
+      });
+      activeTerminalId = id;
+      switchPage("terminal");
+      renderTerminal();
+      showToast("已进入 vLLM Docker bash 会话。");
+    }
+
     async function enterDockerBash() {
       if (apiAvailable) {
         try {
@@ -2677,6 +2965,21 @@ Esc 取消</textarea>
       showToast("已写入重启动作。");
     });
 
+    document.getElementById("showVllmLogs").addEventListener("click", async () => {
+      if (apiAvailable) {
+        try {
+          await apiFetch("/api/container/vllm/logs/start", { method: "POST", body: "{}" });
+          activeTerminalId = "vllm-logs";
+          await refreshSessions();
+          switchPage("terminal");
+        } catch (error) {
+          showToast(error.message);
+        }
+        return;
+      }
+      showToast("需后端部署后生效");
+    });
+
     document.getElementById("showLogs").addEventListener("click", async () => {
       if (apiAvailable) {
         try {
@@ -2751,6 +3054,7 @@ Esc 取消</textarea>
 
     document.getElementById("newTerminal").addEventListener("click", () => createTerminal());
     document.getElementById("enterDockerBash").addEventListener("click", enterDockerBash);
+    document.getElementById("enterVllmDockerBash").addEventListener("click", enterVllmDockerBash);
     document.getElementById("sendCommand").addEventListener("click", sendTerminalCommand);
     document.getElementById("terminalCommand").addEventListener("keydown", event => {
       if (event.key === "Enter") sendTerminalCommand();

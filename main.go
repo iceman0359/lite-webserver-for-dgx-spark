@@ -58,6 +58,7 @@ type Config struct {
 	BindHost          string   `json:"bindHost"`
 	Port              int      `json:"port"`
 	ContainerName     string   `json:"containerName"`
+	VllmContainerName string   `json:"vllmContainerName"`
 	AppRoot           string   `json:"appRoot"`
 	DataRoot          string   `json:"dataRoot"`
 	ContainerDataRoot string   `json:"containerDataRoot"`
@@ -81,6 +82,8 @@ type Config struct {
 	HTTPProxy                     string `json:"httpProxy"`
 	SocksProxy                    string `json:"socksProxy"`
 	ControlButtons                []string `json:"controlButtons"`
+	VllmServiceStartCommand       string   `json:"vllmServiceStartCommand"`
+	VllmServiceStopCommand        string   `json:"vllmServiceStopCommand"`
 }
 
 func defaultConfig() Config {
@@ -88,6 +91,7 @@ func defaultConfig() Config {
 		BindHost:          "127.0.0.1",
 		Port:              8848,
 		ContainerName:     "comfyui",
+		VllmContainerName: "vllm-qwen35b",
 		AppRoot:           defaultAppRoot,
 		DataRoot:          defaultDataRoot,
 		ContainerDataRoot: defaultContainerRoot,
@@ -111,6 +115,8 @@ func defaultConfig() Config {
 		ClashStopCommand:      "pkill -TERM -f 'clash-verge|Clash Verge'",
 		HTTPProxy:             "http://127.0.0.1:7890",
 		SocksProxy:            "socks5://127.0.0.1:7891",
+		VllmServiceStartCommand: "docker exec vllm-qwen35b bash -c 'vllm serve nvidia/Qwen3.6-35B-A3B-NVFP4 --host 127.0.0.1 --port 8000 --tensor-parallel-size 1 --trust-remote-code --kv-cache-dtype fp8 --attention-backend flashinfer --moe-backend marlin --gpu-memory-utilization 0.4 --max-model-len 262144 --max-num-seqs 4 --max-num-batched-tokens 8192 --enable-chunked-prefill --async-scheduling --enable-prefix-caching --speculative-config '\"'\"'{\"method\":\"mtp\",\"num_speculative_tokens\":1,\"moe_backend\":\"triton\"}'\"'\"' --load-format fastsafetensors --reasoning-parser qwen3 --tool-call-parser qwen3_xml --enable-auto-tool-choice'",
+		VllmServiceStopCommand:  "docker exec vllm-qwen35b pkill -f 'vllm serve'",
 		ControlButtons:        []string{"Ctrl+C 中断", "Ctrl+D 结束输入", "Ctrl+Z 挂起", "Ctrl+L 清屏", "Tab 补全", "Esc 取消"},
 	}
 }
@@ -221,9 +227,12 @@ func main() {
 
 	addr := net.JoinHostPort(cfg.BindHost, strconv.Itoa(cfg.Port))
 	server := &http.Server{
-		Addr: addr,
-		Handler: localOnly(withSecurityHeaders(mux)),
+		Addr:              addr,
+		Handler:           localOnly(withSecurityHeaders(recoverMiddleware(mux))),
 		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 16,
 	}
 	s.httpServer = server
 
@@ -252,13 +261,19 @@ func loadConfig(path string, cfg *Config) error {
 }
 
 func saveConfig(path string, cfg Config) error {
-	normalizeConfig(&cfg)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	data = append(data, '\n')
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
+
+
 
 func normalizeConfig(cfg *Config) {
 	cfg.ConfigPath = ""
@@ -524,6 +539,9 @@ func (srv *Server) initFixedSessions() {
 	srv.sessions.Add(downloader)
 
 	logs := NewSession("logs", "容器日志", srv.cfg.AppRoot, "fixed", true, false)
+	vllmLogs := NewSession("vllm-logs", "vLLM 日志", srv.cfg.AppRoot, "fixed", true, false)
+	vllmLogs.Append("[vllm] logs session ready.")
+	srv.sessions.Add(vllmLogs)
 	logs.Append("[docker] logs session ready.")
 	srv.sessions.Add(logs)
 }
@@ -537,7 +555,13 @@ func (srv *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/container/start", srv.method("POST", srv.handleContainerStart))
 	mux.HandleFunc("/api/container/stop", srv.method("POST", srv.handleContainerStop))
 	mux.HandleFunc("/api/container/restart", srv.method("POST", srv.handleContainerRestart))
+	mux.HandleFunc("/api/container/vllm/logs/start", srv.method("POST", srv.handleVllmContainerLogsStart))
 	mux.HandleFunc("/api/container/logs/start", srv.method("POST", srv.handleContainerLogsStart))
+	mux.HandleFunc("/api/container/vllm/status", srv.method("GET", srv.handleVllmContainerStatus))
+	mux.HandleFunc("/api/container/vllm/start", srv.method("POST", srv.handleVllmContainerStart))
+	mux.HandleFunc("/api/container/vllm/stop", srv.method("POST", srv.handleVllmContainerStop))
+	mux.HandleFunc("/api/container/vllm/service/start", srv.method("POST", srv.handleVllmServiceStart))
+	mux.HandleFunc("/api/container/vllm/service/stop", srv.method("POST", srv.handleVllmServiceStop))
 
 	mux.HandleFunc("/api/files/list", srv.method("GET", srv.handleFilesList))
 	mux.HandleFunc("/api/files/delete", srv.method("POST", srv.handleFilesDelete))
@@ -545,6 +569,7 @@ func (srv *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/download/dirs", srv.method("GET", srv.handleDownloadDirs))
 	mux.HandleFunc("/api/terminal/sessions", srv.method("GET", srv.handleTerminalSessions))
 	mux.HandleFunc("/api/terminal/create", srv.method("POST", srv.handleTerminalCreate))
+	mux.HandleFunc("/api/terminal/vllm-docker-bash", srv.method("POST", srv.handleTerminalVllmDockerBash))
 	mux.HandleFunc("/api/terminal/docker-bash", srv.method("POST", srv.handleTerminalDockerBash))
 	mux.HandleFunc("/api/terminal/input", srv.method("POST", srv.handleTerminalInput))
 	mux.HandleFunc("/api/terminal/control", srv.method("POST", srv.handleTerminalControl))
@@ -559,6 +584,7 @@ func (srv *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/clash/start", srv.method("POST", srv.handleClashStart))
 	mux.HandleFunc("/api/clash/stop", srv.method("POST", srv.handleClashStop))
 
+	mux.HandleFunc("/api/system/temp", srv.method("GET", srv.handleSystemTemp))
 	mux.HandleFunc("/api/service/stop", srv.method("POST", srv.handleServiceStop))
 	mux.HandleFunc("/api/service/restart", srv.method("POST", srv.handleServiceRestart))
 }
@@ -571,6 +597,18 @@ func (srv *Server) method(method string, next http.HandlerFunc) http.HandlerFunc
 		}
 		next(w, r)
 	}
+}
+
+func recoverMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("panic recovered: %v", rec)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func withSecurityHeaders(next http.Handler) http.Handler {
@@ -696,7 +734,7 @@ func (srv *Server) handleContainerStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	out, err := runCommand(r.Context(), "docker", "start", name)
-	srv.appendLogs("[docker] docker start "+name+"\n"+out)
+	srv.appendLogs("logs", "[docker] docker start "+name+"\n"+out)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -707,7 +745,7 @@ func (srv *Server) handleContainerStart(w http.ResponseWriter, r *http.Request) 
 func (srv *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
 	name := srv.currentConfig().ContainerName
 	out, err := runCommand(r.Context(), "docker", "stop", name)
-	srv.appendLogs("[docker] docker stop "+name+"\n"+out)
+	srv.appendLogs("logs", "[docker] docker stop "+name+"\n"+out)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -718,12 +756,28 @@ func (srv *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
 func (srv *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request) {
 	name := srv.currentConfig().ContainerName
 	out, err := runCommand(r.Context(), "docker", "restart", name)
-	srv.appendLogs("[docker] docker restart "+name+"\n"+out)
+	srv.appendLogs("logs", "[docker] docker restart "+name+"\n"+out)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "running", "output": out})
+}
+
+func (srv *Server) handleVllmContainerLogsStart(w http.ResponseWriter, r *http.Request) {
+	name := srv.currentConfig().VllmContainerName
+	vllmLogs, _ := srv.sessions.Get("vllm-logs")
+	if vllmLogs == nil {
+		writeError(w, http.StatusInternalServerError, errors.New("vllm logs session missing"))
+		return
+	}
+	if !vllmLogs.tryStart() {
+		writeJSON(w, http.StatusOK, map[string]string{"session": "vllm-logs", "status": "already-running"})
+		return
+	}
+	vllmLogs.Append("[vllm] docker logs -f --tail=200 " + name)
+	go srv.runStreamingCommandStarted(vllmLogs, srv.currentConfig().AppRoot, "docker", "logs", "-f", "--tail=200", name)
+	writeJSON(w, http.StatusOK, map[string]string{"session": "vllm-logs"})
 }
 
 func (srv *Server) handleContainerLogsStart(w http.ResponseWriter, r *http.Request) {
@@ -740,6 +794,88 @@ func (srv *Server) handleContainerLogsStart(w http.ResponseWriter, r *http.Reque
 	logs.Append("[docker] docker logs -f --tail=200 " + name)
 	go srv.runStreamingCommandStarted(logs, srv.currentConfig().AppRoot, "docker", "logs", "-f", "--tail=200", name)
 	writeJSON(w, http.StatusOK, map[string]string{"session": "logs"})
+}
+
+func (srv *Server) handleVllmContainerStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := srv.vllmContainerStatus(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": status})
+}
+
+func (srv *Server) handleVllmContainerStart(w http.ResponseWriter, r *http.Request) {
+	name := srv.currentConfig().VllmContainerName
+	if ok := srv.containerExists(r.Context(), name); !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("container %q not found", name))
+		return
+	}
+	out, err := runCommand(r.Context(), "docker", "start", name)
+	srv.appendLogs("vllm-logs", "[vllm] docker start "+name+"\n"+out)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "running", "output": out})
+}
+
+func (srv *Server) handleVllmContainerStop(w http.ResponseWriter, r *http.Request) {
+	name := srv.currentConfig().VllmContainerName
+	out, err := runCommand(r.Context(), "docker", "stop", name)
+	srv.appendLogs("vllm-logs", "[vllm] docker stop "+name+"\n"+out)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped", "output": out})
+}
+
+func (srv *Server) handleVllmServiceStart(w http.ResponseWriter, r *http.Request) {
+	cmd := srv.currentConfig().VllmServiceStartCommand
+	if cmd == "" {
+		writeError(w, http.StatusBadRequest, errors.New("vllmServiceStartCommand not configured"))
+		return
+	}
+	out, err := runCommand(r.Context(), "bash", "-c", cmd)
+	srv.appendLogs("vllm-logs", "[vllm] service start\n"+out)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "started", "output": out})
+}
+
+func (srv *Server) handleVllmServiceStop(w http.ResponseWriter, r *http.Request) {
+	cmd := srv.currentConfig().VllmServiceStopCommand
+	if cmd == "" {
+		writeError(w, http.StatusBadRequest, errors.New("vllmServiceStopCommand not configured"))
+		return
+	}
+	out, err := runCommand(r.Context(), "bash", "-c", cmd)
+	srv.appendLogs("vllm-logs", "[vllm] service stop\n"+out)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped", "output": out})
+}
+
+func (srv *Server) vllmContainerStatus(ctx context.Context) (string, error) {
+	name := srv.currentConfig().VllmContainerName
+	if !srv.containerExists(ctx, name) {
+		return "missing", nil
+	}
+	out, err := runCommand(ctx, "docker", "inspect", "--format={{.State.Status}}", name)
+	if err != nil {
+		return "", err
+	}
+	switch strings.TrimSpace(out) {
+	case "running":
+		return "running", nil
+	default:
+		return "stopped", nil
+	}
 }
 
 func (srv *Server) containerExists(ctx context.Context, name string) bool {
@@ -764,9 +900,9 @@ func (srv *Server) containerStatus(ctx context.Context) (string, error) {
 	}
 }
 
-func (srv *Server) appendLogs(data string) {
-	if logs, ok := srv.sessions.Get("logs"); ok {
-		logs.Append(data)
+func (srv *Server) appendLogs(sessionID, data string) {
+	if s, ok := srv.sessions.Get(sessionID); ok {
+		s.Append(data)
 	}
 }
 
@@ -806,7 +942,7 @@ func (srv *Server) handleFilesDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	name := srv.currentConfig().ContainerName
 	out, err := runCommand(r.Context(), "docker", "exec", name, "rm", "-rf", "--", containerPath)
-	srv.appendLogs("[docker] docker exec "+name+" rm -rf -- "+containerPath+"\n"+out)
+	srv.appendLogs("logs", "[docker] docker exec "+name+" rm -rf -- "+containerPath+"\n"+out)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1111,6 +1247,19 @@ func (srv *Server) handleTerminalCreate(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": session.ID})
+}
+
+func (srv *Server) handleTerminalVllmDockerBash(w http.ResponseWriter, r *http.Request) {
+	name := srv.currentConfig().VllmContainerName
+	session, err := srv.createShellSession(srv.currentConfig().DataRoot, "vLLM bash", []string{"docker", "exec", "-it", name, "bash", "-i"}, true, false)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	session.mu.Lock()
+	session.CWD = "/workspace"
+	session.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]string{"id": session.ID})
 }
 
@@ -1763,6 +1912,41 @@ func (srv *Server) handleClashStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]bool{"stopped": true})
 }
 
+func (srv *Server) handleSystemTemp(w http.ResponseWriter, r *http.Request) {
+	type TempZone struct {
+		Name string  `json:"name"`
+		Temp float64 `json:"temp"`
+	}
+	zones := make([]TempZone, 0, 8)
+	entries, err := os.ReadDir("/sys/class/thermal")
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"zones": zones, "error": err.Error()})
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "thermal_zone") {
+			continue
+		}
+		typePath := "/sys/class/thermal/" + name + "/type"
+		tempPath := "/sys/class/thermal/" + name + "/temp"
+		typeBytes, err := os.ReadFile(typePath)
+		if err != nil {
+			continue
+		}
+		tempBytes, err := os.ReadFile(tempPath)
+		if err != nil {
+			continue
+		}
+		milliC, _ := strconv.ParseInt(strings.TrimSpace(string(tempBytes)), 10, 64)
+		zones = append(zones, TempZone{
+			Name: strings.TrimSpace(string(typeBytes)),
+			Temp: float64(milliC) / 1000.0,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"zones": zones})
+}
+
 func (srv *Server) handleServiceStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]bool{"stopping": true})
 	go srv.stopService(false)
@@ -2388,6 +2572,18 @@ func parseCommandLine(command string) ([]string, error) {
 
 func pathJoinSlash(base, rel string) string {
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(rel, "/")
+}
+
+func safeTruncate(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	// Ensure we don't split a multi-byte UTF-8 character
+	end := maxBytes
+	for end > 0 && end < len(s) && s[end]&0xC0 == 0x80 {
+		end--
+	}
+	return s[:end]
 }
 
 func min(a, b int) int {
